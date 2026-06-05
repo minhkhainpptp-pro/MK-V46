@@ -25,7 +25,7 @@
     title: 'Công nợ',
     subtitle: 'Nguồn chuẩn duy nhất: arLedgers',
     template: function () {
-      return '<div class="grid-2"><div class="card"><div class="actions"><input id="debtKeyword" placeholder="Tìm mã/tên khách"><button id="loadDebtBtn" class="primary">Tải khách nợ</button></div><div class="table-wrap"><table><thead><tr><th>Mã KH</th><th>Tên KH</th><th>Tổng nợ</th><th>NVBH</th><th>NVGH</th></tr></thead><tbody id="debtCustomerRows"></tbody></table></div></div><div class="card" id="debtDetail"><div class="muted">Chọn một khách hàng để xem sổ AR Ledger.</div></div></div>';
+      return '<div class="grid-2"><div class="card"><div class="inline-search"><input id="debtKeyword" placeholder="Tìm mã/tên khách hàng"><button id="loadDebtBtn" class="primary">Tìm khách nợ</button></div><div class="table-wrap"><table><thead><tr><th>Mã KH</th><th>Tên KH</th><th>Tổng nợ</th><th>NVBH</th><th>NVGH</th></tr></thead><tbody id="debtCustomerRows"></tbody></table></div></div><div class="card" id="debtDetail"><div class="muted">Chọn một khách hàng để xem sổ AR Ledger.</div></div></div>';
     },
     mount: async function () { document.getElementById('loadDebtBtn').onclick = loadCustomers; }
   });

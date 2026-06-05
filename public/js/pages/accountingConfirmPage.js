@@ -43,7 +43,7 @@
     title: 'Xác nhận kế toán',
     subtitle: 'Chỉ kế toán/admin mới sinh AR, Inventory và Journal',
     template: function () {
-      return '<div class="card"><div class="grid"><div><label>Ngày giao</label><input id="accDeliveryDate" type="date"></div><div><label>NVGH</label><input id="accDeliveryStaffCode" placeholder="VD: GH001"></div></div><div class="actions" style="margin-top:10px"><button id="loadAccountingBtn" class="primary">Tải đơn đã giao</button></div><div id="accountingPerf" class="perf"></div></div><div class="card table-wrap"><table><thead><tr><th>Ngày giao</th><th>Mã đơn</th><th>Khách hàng</th><th>Tiền đơn</th><th>Trả</th><th>Thu</th><th>Còn</th><th>Kế toán</th><th>Thao tác</th></tr></thead><tbody id="accountingRows"></tbody></table></div>';
+      return '<div class="card"><div class="grid"><div><label>Ngày giao</label><input id="accDeliveryDate" type="date"></div><div><label>NVGH</label><input id="accDeliveryStaffCode" placeholder="VD: GH001"></div></div><div class="actions"><button id="loadAccountingBtn" class="primary">Tải đơn đã giao</button></div><div id="accountingPerf" class="perf"></div></div><div class="card table-wrap"><table><thead><tr><th>Ngày giao</th><th>Mã đơn</th><th>Khách hàng</th><th>Tiền đơn</th><th>Trả</th><th>Thu</th><th>Còn</th><th>Kế toán</th><th>Thao tác</th></tr></thead><tbody id="accountingRows"></tbody></table></div>';
     },
     mount: async function () {
       document.getElementById('accDeliveryDate').value = F.today();

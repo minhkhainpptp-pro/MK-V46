@@ -107,3 +107,118 @@ input[type="checkbox"] { width: auto; }
   .actions { align-items: stretch; }
   .actions button { width: 100%; }
 }
+
+
+/* V46 UI control standardization: shared search bars, filters and buttons */
+:root {
+  --control-h: 40px;
+  --control-radius: 10px;
+  --control-border: #dbe3ef;
+  --control-focus: rgba(37, 99, 235, .14);
+}
+input, select, textarea {
+  min-height: var(--control-h);
+  border-color: var(--control-border);
+  outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--control-focus);
+}
+button, .mk-btn {
+  min-height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease, background .12s ease;
+}
+button:hover:not(:disabled), .mk-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, .08);
+}
+button.primary, .mk-btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+button.success, .mk-btn-success {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+button.danger, .mk-btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+button.secondary, .mk-btn-secondary {
+  background: #eef2f7;
+  border-color: #dbe3ef;
+  color: #334155;
+}
+.mk-filter-card {
+  padding: 12px 14px;
+}
+.mk-filter-grid,
+.card > .grid.mk-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+.mk-filter-grid > input,
+.mk-filter-grid > select,
+.mk-filter-grid > textarea {
+  align-self: end;
+}
+.mk-actionbar,
+.actions.mk-actionbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 10px;
+}
+.inline-search,
+.mk-inline-search {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+.inline-search input,
+.mk-inline-search input { min-width: 0; }
+.inline-search button,
+.mk-inline-search button { min-width: 108px; }
+.card .actions input,
+.card .actions select { min-width: 180px; flex: 1 1 220px; }
+.card .actions button { flex: 0 0 auto; }
+.filter-help { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.table-toolbar h3 { margin: 0; }
+@media (max-width: 700px) {
+  .mk-filter-grid,
+  .card > .grid.mk-filter-grid,
+  .inline-search,
+  .mk-inline-search {
+    grid-template-columns: 1fr;
+  }
+  .card .actions input,
+  .card .actions select,
+  .card .actions button,
+  .mk-actionbar button {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+}
