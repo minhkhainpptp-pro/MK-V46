@@ -53,7 +53,8 @@
   async function openDetail(id) {
     selectedOrder = id;
     var payload = await window.MKApi.get('/api/mobile/delivery/orders/' + encodeURIComponent(id));
-    selectedDetail = payload.data || payload;
+    selectedDetail = payload.data || payload.order || payload;
+    if (payload.order && !selectedDetail.items) selectedDetail = payload.order;
     var items = selectedDetail.items || [];
     var html = '<div class="detail-panel"><div class="detail-head"><div><b>' + F.esc(selectedDetail.salesOrderCode || selectedDetail.code || id) + '</b><div class="muted">' + F.esc(selectedDetail.customerName || '') + ' - ' + F.esc(selectedDetail.customerCode || '') + '</div></div><button id="closeDeliveryDetail">Đóng</button></div>'
       + '<div class="detail-body"><h3>Sản phẩm giao / trả</h3><div class="table-wrap"><table><thead><tr><th>Mã SP</th><th>Tên SP</th><th>SL đặt</th><th>Đơn giá</th><th>Thành tiền</th><th>SL trả</th></tr></thead><tbody>'
@@ -130,6 +131,7 @@
     mount: async function () {
       document.getElementById('deliveryDate').value = F.today();
       document.getElementById('loadDeliveryBtn').onclick = loadOrders;
+      await loadOrders();
     }
   });
 }());

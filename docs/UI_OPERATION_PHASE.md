@@ -40,3 +40,13 @@
 8. Mở Xác nhận kế toán, xác nhận đơn đã giao.
 9. Kiểm tra Công nợ, Tồn kho, Dashboard cập nhật.
 10. Test App bán hàng tạo đơn pending.
+
+
+## UI vận hành chuẩn hóa bổ sung
+
+- Đơn bán dùng form chọn khách/chọn sản phẩm/giỏ hàng, không nhập JSON thô.
+- Đơn tổng dùng danh sách đơn pending và checkbox, không nhập mã thủ công.
+- Trả hàng chọn đơn rồi nhập số lượng trả theo dòng hàng gốc.
+- Import DMS hỗ trợ đọc file Excel/CSV/JSON, preview trước khi confirm.
+- App bán hàng mobile dùng chọn khách, tìm sản phẩm và giỏ hàng thật.
+- Các danh sách quan trọng auto-load khi mở màn, có perf hiển thị.
