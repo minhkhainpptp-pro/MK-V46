@@ -7,6 +7,8 @@ const FundLedger = require('../models/FundLedger');
 const Inventory = require('../models/Inventory');
 const Journal = require('../models/Journal');
 const { roundMoney } = require('../utils/money.util');
+const { withTransaction, acquireOperation, completeOperation } = require('../core/operationGuard');
+const { writeAuditLog } = require('../core/audit');
 
 function httpError(message, status = 400) { return Object.assign(new Error(message), { status }); }
 function cleanText(value) { return String(value || '').trim(); }
@@ -23,15 +25,23 @@ function buildOrderLookup(key) {
   return { $or: or };
 }
 
-async function createArOnce(payload) {
+async function applySession(query, session) {
+  if (session && query && typeof query.session === 'function') query.session(session);
+  return query;
+}
+
+async function createArOnce(payload, options = {}) {
+  const session = options.session;
   const sourceType = cleanText(payload.sourceType);
   const sourceId = cleanText(payload.sourceId);
   const type = cleanText(payload.type);
   if (sourceType && sourceId && type) {
-    const existed = await ArLedger.findOne({ sourceType, sourceId, type }).lean();
+    const existedQuery = ArLedger.findOne({ sourceType, sourceId, type });
+    if (session) existedQuery.session(session);
+    const existed = await existedQuery.lean();
     if (existed) return existed;
   }
-  const doc = await ArLedger.create({
+  const [doc] = await ArLedger.create([{
     id: cleanText(payload.id) || makeCode('AR', `${type}-${sourceId}`),
     code: cleanText(payload.code) || makeCode(type, payload.sourceCode || sourceId),
     type,
@@ -50,21 +60,24 @@ async function createArOnce(payload) {
     sourceId,
     sourceCode: cleanText(payload.sourceCode),
     createdBy: cleanText(payload.createdBy),
-  });
+  }], session ? { session } : undefined);
   return doc.toObject();
 }
 
-async function createFundOnce(payload) {
+async function createFundOnce(payload, options = {}) {
+  const session = options.session;
   const sourceType = cleanText(payload.sourceType);
   const sourceId = cleanText(payload.sourceId);
   const type = cleanText(payload.type);
   if (sourceType && sourceId && type) {
-    const existed = await FundLedger.findOne({ sourceType, sourceId, type }).lean();
+    const existedQuery = FundLedger.findOne({ sourceType, sourceId, type });
+    if (session) existedQuery.session(session);
+    const existed = await existedQuery.lean();
     if (existed) return existed;
   }
   const amount = amountOf(payload.amount);
   if (amount <= 0) return null;
-  const doc = await FundLedger.create({
+  const [doc] = await FundLedger.create([{
     id: cleanText(payload.id) || makeCode('FL', `${type}-${sourceId}`),
     code: cleanText(payload.code) || makeCode(type, payload.sourceCode || sourceId),
     type,
@@ -81,22 +94,25 @@ async function createFundOnce(payload) {
     sourceType,
     sourceId,
     createdBy: cleanText(payload.createdBy),
-  });
+  }], session ? { session } : undefined);
   return doc.toObject();
 }
 
-async function createInventoryOnce(payload) {
+async function createInventoryOnce(payload, options = {}) {
+  const session = options.session;
   const sourceType = cleanText(payload.referenceType || payload.sourceType);
   const sourceId = cleanText(payload.referenceId || payload.sourceId);
   const transactionType = cleanText(payload.transactionType);
   const productCode = cleanText(payload.productCode);
   if (sourceType && sourceId && transactionType && productCode) {
-    const existed = await Inventory.findOne({ referenceType: sourceType, referenceId: sourceId, transactionType, productCode }).lean();
+    const existedQuery = Inventory.findOne({ referenceType: sourceType, referenceId: sourceId, transactionType, productCode });
+    if (session) existedQuery.session(session);
+    const existed = await existedQuery.lean();
     if (existed) return existed;
   }
   const qty = Number(payload.qty || 0);
   if (!qty) return null;
-  const doc = await Inventory.create({
+  const [doc] = await Inventory.create([{
     transactionType,
     productId: cleanText(payload.productId || payload.productCode),
     productCode,
@@ -111,21 +127,24 @@ async function createInventoryOnce(payload) {
     referenceCode: cleanText(payload.referenceCode || payload.sourceCode),
     note: cleanText(payload.note),
     createdBy: cleanText(payload.createdBy),
-  });
+  }], session ? { session } : undefined);
   return doc.toObject();
 }
 
-async function createJournalOnce(payload) {
+async function createJournalOnce(payload, options = {}) {
+  const session = options.session;
   const sourceType = cleanText(payload.sourceType);
   const sourceId = cleanText(payload.sourceId);
   const type = cleanText(payload.type);
   if (sourceType && sourceId && type) {
-    const existed = await Journal.findOne({ sourceType, sourceId, type }).lean();
+    const existedQuery = Journal.findOne({ sourceType, sourceId, type });
+    if (session) existedQuery.session(session);
+    const existed = await existedQuery.lean();
     if (existed) return existed;
   }
   const amount = amountOf(payload.amount);
   if (amount <= 0) return null;
-  const doc = await Journal.create({
+  const [doc] = await Journal.create([{
     id: cleanText(payload.id) || makeCode('JNL', `${type}-${sourceId}`),
     code: cleanText(payload.code) || makeCode(`JNL-${type}`, payload.sourceCode || sourceId),
     type,
@@ -143,24 +162,30 @@ async function createJournalOnce(payload) {
     sourceCode: cleanText(payload.sourceCode),
     note: cleanText(payload.note),
     createdBy: cleanText(payload.createdBy),
-  });
+  }], session ? { session } : undefined);
   return doc.toObject();
 }
 
-async function loadMaster(masterOrderId) {
+async function loadMaster(masterOrderId, options = {}) {
+  const session = options.session;
   const key = cleanText(masterOrderId);
   if (!key) throw httpError('Thiếu masterOrderId', 400);
   const or = [{ id: key }, { code: key }];
   if (mongoose.Types.ObjectId.isValid(key)) or.push({ _id: key });
-  const master = await MasterOrder.findOne({ $or: or }).lean();
+  const query = MasterOrder.findOne({ $or: or });
+  if (session) query.session(session);
+  const master = await query.lean();
   if (!master) throw httpError('Không tìm thấy đơn tổng', 404);
   return master;
 }
 
-async function loadDeliveredOrder(salesOrderId) {
+async function loadDeliveredOrder(salesOrderId, options = {}) {
+  const session = options.session;
   const filter = buildOrderLookup(salesOrderId);
   if (!filter) throw httpError('Thiếu salesOrderId', 400);
-  const order = await SalesOrder.findOne(filter).lean();
+  const query = SalesOrder.findOne(filter);
+  if (session) query.session(session);
+  const order = await query.lean();
   if (!order) throw httpError('Không tìm thấy đơn bán', 404);
   if (order.status === 'cancelled') throw httpError('Đơn đã hủy, không thể xác nhận kế toán', 409);
   if (order.accountingStatus === 'posted' || order.accountingConfirmed) throw httpError('Đơn đã xác nhận kế toán', 409);
@@ -170,7 +195,7 @@ async function loadDeliveredOrder(salesOrderId) {
   return order;
 }
 
-async function postDeliveredOrders({ master = {}, deliveredOrders = [], confirmedBy = '' }) {
+async function postDeliveredOrders({ master = {}, deliveredOrders = [], confirmedBy = '', session = null }) {
   const arLedgers = [];
   const fundLedgers = [];
   const inventoryLedgers = [];
@@ -181,10 +206,12 @@ async function postDeliveredOrders({ master = {}, deliveredOrders = [], confirme
 
   const orderIds = deliveredOrders.map((order) => cleanText(order.id || order._id));
   const orderCodes = deliveredOrders.map((order) => cleanText(order.code));
-  const returnOrders = await ReturnOrder.find({
+  const returnQuery = ReturnOrder.find({
     status: { $nin: ['cancelled'] },
     $or: [{ salesOrderId: { $in: orderIds } }, { salesOrderCode: { $in: orderCodes } }],
-  }).lean();
+  });
+  if (session) returnQuery.session(session);
+  const returnOrders = await returnQuery.lean();
 
   const returnsByOrder = new Map();
   for (const ro of returnOrders) {
@@ -203,45 +230,86 @@ async function postDeliveredOrders({ master = {}, deliveredOrders = [], confirme
     const masterOrderCode = cleanText(master.code || order.masterOrderCode);
 
     if (saleAmount > 0) {
-      arLedgers.push(await createArOnce({
-        type: 'AR-SALE', date: saleDate, customerCode: order.customerCode, customerName: order.customerName,
-        salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode,
-        debit: saleAmount, credit: 0, amount: saleAmount,
+      const ar = await createArOnce({
+        type: 'AR-SALE',
+        date: saleDate,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        debit: saleAmount,
+        credit: 0,
+        amount: saleAmount,
         note: 'Ghi nhận công nợ bán hàng khi kế toán xác nhận',
-        sourceType: 'salesOrder', sourceId: orderId, sourceCode: orderCode, createdBy: confirmedBy,
-      }));
+        sourceType: 'salesOrder',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        createdBy: confirmedBy,
+      }, { session });
+      if (ar) arLedgers.push(ar);
+
       const journal = await createJournalOnce({
-        type: 'SALE', date: saleDate, amount: saleAmount,
-        customerCode: order.customerCode, customerName: order.customerName,
-        salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode,
-        sourceType: 'salesOrder', sourceId: orderId, sourceCode: orderCode,
-        note: 'Journal bán hàng', createdBy: confirmedBy,
+        type: 'SALE',
+        date: saleDate,
+        amount: saleAmount,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        sourceType: 'salesOrder',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        note: 'Journal bán hàng',
+        createdBy: confirmedBy,
         lines: [
           { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: saleAmount, credit: 0 },
           { accountCode: 'DTBH', accountName: 'Doanh thu bán hàng', debit: 0, credit: saleAmount },
         ],
-      });
+      }, { session });
       if (journal) journals.push(journal);
     }
 
     for (const item of order.items || []) {
       const qty = -Math.abs(Number(item.quantity || item.qty || 0));
       const inv = await createInventoryOnce({
-        transactionType: 'OUT_SALE', productId: item.productId || item.productCode,
-        productCode: item.productCode, productName: item.productName,
-        warehouseId: item.warehouseCode || 'DEFAULT', warehouseCode: item.warehouseCode || 'DEFAULT', warehouseName: item.warehouseName,
-        qty, unit: item.unit, referenceType: 'salesOrder', referenceId: `${orderId}:${item.productCode}`, referenceCode: orderCode,
-        note: 'Xuất kho bán hàng khi kế toán xác nhận', createdBy: confirmedBy,
-      });
+        transactionType: 'OUT_SALE',
+        productId: item.productId || item.productCode,
+        productCode: item.productCode,
+        productName: item.productName,
+        warehouseId: item.warehouseCode || 'DEFAULT',
+        warehouseCode: item.warehouseCode || 'DEFAULT',
+        warehouseName: item.warehouseName,
+        qty,
+        unit: item.unit,
+        referenceType: 'salesOrder',
+        referenceId: `${orderId}:${item.productCode}`,
+        referenceCode: orderCode,
+        note: 'Xuất kho bán hàng khi kế toán xác nhận',
+        createdBy: confirmedBy,
+      }, { session });
       if (inv) inventoryLedgers.push(inv);
+
       const inventoryAmount = amountOf(Number(item.price || 0) * Math.abs(qty));
       const journal = await createJournalOnce({
-        type: 'INVENTORY_OUT', date: saleDate, amount: inventoryAmount || Math.abs(qty),
-        customerCode: order.customerCode, customerName: order.customerName,
-        salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode,
-        sourceType: 'inventoryOut', sourceId: `${orderId}:${item.productCode}`, sourceCode: orderCode,
-        note: 'Journal xuất kho bán hàng', createdBy: confirmedBy,
-      });
+        type: 'INVENTORY_OUT',
+        date: saleDate,
+        amount: inventoryAmount || Math.abs(qty),
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        sourceType: 'inventoryOut',
+        sourceId: `${orderId}:${item.productCode}`,
+        sourceCode: orderCode,
+        note: 'Journal xuất kho bán hàng',
+        createdBy: confirmedBy,
+      }, { session });
       if (journal) journals.push(journal);
     }
 
@@ -252,47 +320,102 @@ async function postDeliveredOrders({ master = {}, deliveredOrders = [], confirme
       if (seenReturnIds.has(roId)) continue;
       seenReturnIds.add(roId);
       const returnAmount = amountOf(ro.totalReturnAmount || ro.amount || 0);
+
       if (returnAmount > 0) {
-        arLedgers.push(await createArOnce({
-          type: 'AR-RETURN', date: ro.deliveryDate || saleDate, customerCode: ro.customerCode, customerName: ro.customerName,
-          salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode,
-          debit: 0, credit: returnAmount, amount: returnAmount,
-          note: 'Giảm công nợ do hàng trả', sourceType: 'returnOrder', sourceId: roId, sourceCode: ro.code, createdBy: confirmedBy,
-        }));
+        const ar = await createArOnce({
+          type: 'AR-RETURN',
+          date: ro.deliveryDate || saleDate,
+          customerCode: ro.customerCode,
+          customerName: ro.customerName,
+          salesOrderId: orderId,
+          salesOrderCode: orderCode,
+          masterOrderId,
+          masterOrderCode,
+          debit: 0,
+          credit: returnAmount,
+          amount: returnAmount,
+          note: 'Giảm công nợ do hàng trả',
+          sourceType: 'returnOrder',
+          sourceId: roId,
+          sourceCode: ro.code,
+          createdBy: confirmedBy,
+        }, { session });
+        if (ar) arLedgers.push(ar);
+
         const journal = await createJournalOnce({
-          type: 'RETURN', date: ro.deliveryDate || saleDate, amount: returnAmount,
-          customerCode: ro.customerCode, customerName: ro.customerName,
-          salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode,
-          sourceType: 'returnOrder', sourceId: roId, sourceCode: ro.code,
-          note: 'Journal hàng trả giảm công nợ', createdBy: confirmedBy,
+          type: 'RETURN',
+          date: ro.deliveryDate || saleDate,
+          amount: returnAmount,
+          customerCode: ro.customerCode,
+          customerName: ro.customerName,
+          salesOrderId: orderId,
+          salesOrderCode: orderCode,
+          masterOrderId,
+          masterOrderCode,
+          sourceType: 'returnOrder',
+          sourceId: roId,
+          sourceCode: ro.code,
+          note: 'Journal hàng trả giảm công nợ',
+          createdBy: confirmedBy,
           lines: [
             { accountCode: 'HANGTRA', accountName: 'Hàng bán bị trả lại', debit: returnAmount, credit: 0 },
             { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: returnAmount },
           ],
-        });
+        }, { session });
         if (journal) journals.push(journal);
       }
+
       for (const line of ro.items || []) {
         const inv = await createInventoryOnce({
-          transactionType: 'IN_RETURN', productId: line.productCode, productCode: line.productCode, productName: line.productName,
-          warehouseId: line.warehouseCode || 'DEFAULT', warehouseCode: line.warehouseCode || 'DEFAULT', warehouseName: line.warehouseName,
-          qty: Math.abs(Number(line.returnQty || 0)), unit: line.unit,
-          referenceType: 'returnOrder', referenceId: `${roId}:${line.productCode}`, referenceCode: ro.code,
-          note: 'Nhập kho hàng trả khi kế toán xác nhận', createdBy: confirmedBy,
-        });
+          transactionType: 'IN_RETURN',
+          productId: line.productCode,
+          productCode: line.productCode,
+          productName: line.productName,
+          warehouseId: line.warehouseCode || 'DEFAULT',
+          warehouseCode: line.warehouseCode || 'DEFAULT',
+          warehouseName: line.warehouseName,
+          qty: Math.abs(Number(line.returnQty || 0)),
+          unit: line.unit,
+          referenceType: 'returnOrder',
+          referenceId: `${roId}:${line.productCode}`,
+          referenceCode: ro.code,
+          note: 'Nhập kho hàng trả khi kế toán xác nhận',
+          createdBy: confirmedBy,
+        }, { session });
         if (inv) inventoryLedgers.push(inv);
+
         const journal = await createJournalOnce({
-          type: 'INVENTORY_IN', date: ro.deliveryDate || saleDate, amount: amountOf(line.returnAmount || line.amount || 0) || Math.abs(Number(line.returnQty || 0)),
-          customerCode: ro.customerCode, customerName: ro.customerName,
-          salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode,
-          sourceType: 'inventoryReturn', sourceId: `${roId}:${line.productCode}`, sourceCode: ro.code,
-          note: 'Journal nhập kho hàng trả', createdBy: confirmedBy,
-        });
+          type: 'INVENTORY_IN',
+          date: ro.deliveryDate || saleDate,
+          amount: amountOf(line.returnAmount || line.amount || 0) || Math.abs(Number(line.returnQty || 0)),
+          customerCode: ro.customerCode,
+          customerName: ro.customerName,
+          salesOrderId: orderId,
+          salesOrderCode: orderCode,
+          masterOrderId,
+          masterOrderCode,
+          sourceType: 'inventoryReturn',
+          sourceId: `${roId}:${line.productCode}`,
+          sourceCode: ro.code,
+          note: 'Journal nhập kho hàng trả',
+          createdBy: confirmedBy,
+        }, { session });
         if (journal) journals.push(journal);
       }
-      await ReturnOrder.updateOne({ _id: ro._id }, {
-        $set: { status: 'posted', accountingStatus: 'posted', confirmedAt: now, confirmedBy: cleanText(confirmedBy), masterOrderId, masterOrderCode, arPosted: true },
+
+      const updateReturnQuery = ReturnOrder.updateOne({ _id: ro._id }, {
+        $set: {
+          status: 'posted',
+          accountingStatus: 'posted',
+          confirmedAt: now,
+          confirmedBy: cleanText(confirmedBy),
+          masterOrderId,
+          masterOrderCode,
+          arPosted: true,
+        },
       });
+      if (session) updateReturnQuery.session(session);
+      await updateReturnQuery;
     }
 
     const cashAmount = amountOf(order.cashAmount || (order.paymentDraft && order.paymentDraft.cashAmount));
@@ -300,65 +423,259 @@ async function postDeliveredOrders({ master = {}, deliveredOrders = [], confirme
     const bonusAmount = amountOf(order.bonusAmount || (order.paymentDraft && order.paymentDraft.bonusAmount));
 
     if (cashAmount > 0) {
-      arLedgers.push(await createArOnce({ type: 'AR-RECEIPT', date: saleDate, customerCode: order.customerCode, customerName: order.customerName, salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode, debit: 0, credit: cashAmount, amount: cashAmount, note: 'Thu tiền mặt giảm công nợ', sourceType: 'cashReceipt', sourceId: orderId, sourceCode: orderCode, createdBy: confirmedBy }));
-      const fund = await createFundOnce({ type: 'CASH_RECEIPT', method: 'cash', amount: cashAmount, date: saleDate, customerCode: order.customerCode, customerName: order.customerName, salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode, sourceType: 'cashReceipt', sourceId: orderId, sourceCode: orderCode, note: 'Thu tiền mặt từ app giao hàng', createdBy: confirmedBy });
+      const ar = await createArOnce({
+        type: 'AR-RECEIPT',
+        date: saleDate,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        debit: 0,
+        credit: cashAmount,
+        amount: cashAmount,
+        note: 'Thu tiền mặt giảm công nợ',
+        sourceType: 'cashReceipt',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        createdBy: confirmedBy,
+      }, { session });
+      if (ar) arLedgers.push(ar);
+
+      const fund = await createFundOnce({
+        type: 'CASH_RECEIPT',
+        method: 'cash',
+        amount: cashAmount,
+        date: saleDate,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        sourceType: 'cashReceipt',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        note: 'Thu tiền mặt từ app giao hàng',
+        createdBy: confirmedBy,
+      }, { session });
       if (fund) fundLedgers.push(fund);
     }
+
     if (bankAmount > 0) {
-      arLedgers.push(await createArOnce({ type: 'AR-RECEIPT', date: saleDate, customerCode: order.customerCode, customerName: order.customerName, salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode, debit: 0, credit: bankAmount, amount: bankAmount, note: 'Thu chuyển khoản giảm công nợ', sourceType: 'bankReceipt', sourceId: orderId, sourceCode: orderCode, createdBy: confirmedBy }));
-      const fund = await createFundOnce({ type: 'BANK_RECEIPT', method: 'bank', amount: bankAmount, date: saleDate, customerCode: order.customerCode, customerName: order.customerName, salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode, sourceType: 'bankReceipt', sourceId: orderId, sourceCode: orderCode, note: 'Thu chuyển khoản từ app giao hàng', createdBy: confirmedBy });
+      const ar = await createArOnce({
+        type: 'AR-RECEIPT',
+        date: saleDate,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        debit: 0,
+        credit: bankAmount,
+        amount: bankAmount,
+        note: 'Thu chuyển khoản giảm công nợ',
+        sourceType: 'bankReceipt',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        createdBy: confirmedBy,
+      }, { session });
+      if (ar) arLedgers.push(ar);
+
+      const fund = await createFundOnce({
+        type: 'BANK_RECEIPT',
+        method: 'bank',
+        amount: bankAmount,
+        date: saleDate,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        sourceType: 'bankReceipt',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        note: 'Thu chuyển khoản từ app giao hàng',
+        createdBy: confirmedBy,
+      }, { session });
       if (fund) fundLedgers.push(fund);
     }
+
     if (bonusAmount > 0) {
-      arLedgers.push(await createArOnce({ type: 'AR-BONUS', date: saleDate, customerCode: order.customerCode, customerName: order.customerName, salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode, debit: 0, credit: bonusAmount, amount: bonusAmount, note: 'Trả thưởng giảm công nợ', sourceType: 'bonus', sourceId: orderId, sourceCode: orderCode, createdBy: confirmedBy }));
+      const ar = await createArOnce({
+        type: 'AR-BONUS',
+        date: saleDate,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        debit: 0,
+        credit: bonusAmount,
+        amount: bonusAmount,
+        note: 'Trả thưởng giảm công nợ',
+        sourceType: 'bonus',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        createdBy: confirmedBy,
+      }, { session });
+      if (ar) arLedgers.push(ar);
+
       const journal = await createJournalOnce({
-        type: 'BONUS', date: saleDate, amount: bonusAmount,
-        customerCode: order.customerCode, customerName: order.customerName,
-        salesOrderId: orderId, salesOrderCode: orderCode, masterOrderId, masterOrderCode,
-        sourceType: 'bonus', sourceId: orderId, sourceCode: orderCode,
-        note: 'Journal trả thưởng giảm công nợ', createdBy: confirmedBy,
+        type: 'BONUS',
+        date: saleDate,
+        amount: bonusAmount,
+        customerCode: order.customerCode,
+        customerName: order.customerName,
+        salesOrderId: orderId,
+        salesOrderCode: orderCode,
+        masterOrderId,
+        masterOrderCode,
+        sourceType: 'bonus',
+        sourceId: orderId,
+        sourceCode: orderCode,
+        note: 'Journal trả thưởng giảm công nợ',
+        createdBy: confirmedBy,
         lines: [
           { accountCode: 'CPBH', accountName: 'Chi phí bán hàng/trả thưởng', debit: bonusAmount, credit: 0 },
           { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: bonusAmount },
         ],
-      });
+      }, { session });
       if (journal) journals.push(journal);
     }
   }
 
-  await SalesOrder.updateMany({ _id: { $in: deliveredOrders.map((order) => order._id) } }, {
-    $set: { status: 'accounting_confirmed', accountingStatus: 'posted', accountingConfirmed: true, accountingConfirmedAt: now, accountingConfirmedBy: cleanText(confirmedBy) },
+  const updateSalesQuery = SalesOrder.updateMany({ _id: { $in: deliveredOrders.map((order) => order._id) } }, {
+    $set: {
+      status: 'accounting_confirmed',
+      accountingStatus: 'posted',
+      accountingConfirmed: true,
+      accountingConfirmedAt: now,
+      accountingConfirmedBy: cleanText(confirmedBy),
+    },
   });
+  if (session) updateSalesQuery.session(session);
+  await updateSalesQuery;
 
   return { arLedgers, fundLedgers, inventoryLedgers, journals };
 }
 
-async function confirmMasterOrderAccounting(masterOrderId, paymentDrafts = [], confirmedBy = '') {
-  const master = await loadMaster(masterOrderId);
+
+async function confirmMasterOrderAccounting(masterOrderId, paymentDrafts = [], confirmedBy = '', options = {}) {
+  if (options.session) return confirmMasterOrderAccountingCore(masterOrderId, paymentDrafts, confirmedBy, options);
+
+  const operationId = cleanText(options.operationId) || `ACCOUNTING_MASTER:${cleanText(masterOrderId)}`;
+  return withTransaction(async (session) => {
+    await acquireOperation({
+      operationId,
+      type: 'ACCOUNTING_CONFIRM_MASTER',
+      referenceId: cleanText(masterOrderId),
+      userCode: cleanText(confirmedBy),
+    }, session);
+
+    const result = await confirmMasterOrderAccountingCore(masterOrderId, paymentDrafts, confirmedBy, { session });
+
+    await writeAuditLog({
+      module: 'MasterOrder',
+      action: 'ACCOUNTING_CONFIRM_MASTER',
+      referenceId: result.masterOrder && result.masterOrder.id,
+      referenceCode: result.masterOrder && result.masterOrder.code,
+      userCode: cleanText(confirmedBy),
+      after: result.masterOrder,
+      metadata: { postedOrders: result.postedOrders },
+    }, session);
+
+    await completeOperation(operationId, {
+      masterOrderId: result.masterOrder && result.masterOrder.id,
+      postedOrders: result.postedOrders,
+    }, session);
+
+    return result;
+  });
+}
+
+async function confirmMasterOrderAccountingCore(masterOrderId, paymentDrafts = [], confirmedBy = '', options = {}) {
+  const session = options.session;
+  const master = await loadMaster(masterOrderId, { session });
   if (['posted', 'confirmed'].includes(master.accountingStatus)) throw httpError('Đơn tổng đã xác nhận kế toán', 409);
   if (master.status === 'cancelled') throw httpError('Đơn tổng đã hủy, không thể xác nhận', 409);
 
-  const orders = await SalesOrder.find({
+  const orderQuery = SalesOrder.find({
     $or: [
       { masterOrderId: master.id }, { masterOrderCode: master.code },
       { id: { $in: master.salesOrderIds || [] } }, { code: { $in: master.salesOrderCodes || [] } },
     ],
     status: { $ne: 'cancelled' },
-  }).lean();
+  });
+  if (session) orderQuery.session(session);
+  const orders = await orderQuery.lean();
   const deliveredOrders = orders.filter((order) => order.deliveryStatus === 'delivered' || order.status === 'delivered');
 
-  const posted = await postDeliveredOrders({ master, deliveredOrders, confirmedBy });
-  const updatedMaster = await MasterOrder.findByIdAndUpdate(master._id, {
-    $set: { status: 'accounting_confirmed', accountingStatus: 'posted', accountingConfirmed: true, accountingConfirmedAt: new Date(), accountingConfirmedBy: cleanText(confirmedBy) },
-  }, { new: true }).lean();
+  const posted = await postDeliveredOrders({ master, deliveredOrders, confirmedBy, session });
+  const updateMasterQuery = MasterOrder.findByIdAndUpdate(master._id, {
+    $set: {
+      status: 'accounting_confirmed',
+      accountingStatus: 'posted',
+      accountingConfirmed: true,
+      accountingConfirmedAt: new Date(),
+      accountingConfirmedBy: cleanText(confirmedBy),
+    },
+  }, { new: true });
+  if (session) updateMasterQuery.session(session);
+  const updatedMaster = await updateMasterQuery.lean();
 
   return { ok: true, masterOrder: updatedMaster, postedOrders: deliveredOrders.length, ...posted, paymentDraftsIgnored: Array.isArray(paymentDrafts) ? paymentDrafts.length : 0 };
 }
 
-async function confirmDeliveryAccounting(salesOrderId, confirmedBy = '') {
-  const order = await loadDeliveredOrder(salesOrderId);
-  const posted = await postDeliveredOrders({ master: { id: order.masterOrderId, code: order.masterOrderCode, deliveryDate: order.deliveryDate }, deliveredOrders: [order], confirmedBy });
-  const updatedOrder = await SalesOrder.findById(order._id).lean();
+async function confirmDeliveryAccounting(salesOrderId, confirmedBy = '', options = {}) {
+  if (options.session) return confirmDeliveryAccountingCore(salesOrderId, confirmedBy, options);
+
+  const operationId = cleanText(options.operationId) || `ACCOUNTING_DELIVERY:${cleanText(salesOrderId)}`;
+  return withTransaction(async (session) => {
+    await acquireOperation({
+      operationId,
+      type: 'ACCOUNTING_CONFIRM_DELIVERY',
+      referenceId: cleanText(salesOrderId),
+      userCode: cleanText(confirmedBy),
+    }, session);
+
+    const result = await confirmDeliveryAccountingCore(salesOrderId, confirmedBy, { session });
+
+    await writeAuditLog({
+      module: 'SalesOrder',
+      action: 'ACCOUNTING_CONFIRM_DELIVERY',
+      referenceId: result.salesOrder && result.salesOrder.id,
+      referenceCode: result.salesOrder && result.salesOrder.code,
+      userCode: cleanText(confirmedBy),
+      after: result.salesOrder,
+      metadata: { postedOrders: result.postedOrders },
+    }, session);
+
+    await completeOperation(operationId, {
+      salesOrderId: result.salesOrder && result.salesOrder.id,
+      postedOrders: result.postedOrders,
+    }, session);
+
+    return result;
+  });
+}
+
+async function confirmDeliveryAccountingCore(salesOrderId, confirmedBy = '', options = {}) {
+  const session = options.session;
+  const order = await loadDeliveredOrder(salesOrderId, { session });
+  const posted = await postDeliveredOrders({
+    master: { id: order.masterOrderId, code: order.masterOrderCode, deliveryDate: order.deliveryDate },
+    deliveredOrders: [order],
+    confirmedBy,
+    session,
+  });
+  const updatedQuery = SalesOrder.findById(order._id);
+  if (session) updatedQuery.session(session);
+  const updatedOrder = await updatedQuery.lean();
   return { ok: true, salesOrder: updatedOrder, postedOrders: 1, ...posted };
 }
 

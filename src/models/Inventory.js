@@ -13,23 +13,22 @@ const schema = createBaseSchema({
     type: String,
     enum: INVENTORY_TRANSACTION_TYPES,
     required: true,
-    index: true,
   },
 
-  productId: { type: String, required: true, index: true },
-  productCode: { type: String, default: '', index: true },
+  productId: { type: String, required: true },
+  productCode: { type: String, default: '' },
   productName: { type: String, default: '' },
 
-  warehouseId: { type: String, required: true, index: true },
-  warehouseCode: { type: String, default: '', index: true },
+  warehouseId: { type: String, required: true },
+  warehouseCode: { type: String, default: '' },
   warehouseName: { type: String, default: '' },
 
   qty: { type: Number, required: true, default: 0 },
   unit: { type: String, default: '' },
 
-  referenceType: { type: String, default: '', index: true },
-  referenceId: { type: String, default: '', index: true },
-  referenceCode: { type: String, default: '', index: true },
+  referenceType: { type: String, default: '' },
+  referenceId: { type: String, default: '' },
+  referenceCode: { type: String, default: '' },
 
   note: { type: String, default: '' },
 });

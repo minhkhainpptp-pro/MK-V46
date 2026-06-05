@@ -1,24 +1,30 @@
 const service = require('../../services/mobile/delivery.service');
+const { successResponse } = require('../../utils/response.util');
 
 async function listOrders(req, res, next) {
   const started = Date.now();
   try {
     const result = await service.listDeliveryOrders(req.query);
-    res.json({ ok: true, rows: result.rows, orders: result.rows, total: result.total, ms: Date.now() - started, perf: result.perf || { totalMs: Date.now() - started } });
+    return successResponse(res, result.rows, {
+      rows: result.rows,
+      orders: result.rows,
+      total: result.total,
+      ms: Date.now() - started,
+      perf: result.perf || { totalMs: Date.now() - started },
+    });
   } catch (err) { next(err); }
 }
 
 async function getOrder(req, res, next) {
   try {
-    const data = await service.getDeliveryOrderDetail(req.params.id);
-    res.json({ ok: true, data });
+    return successResponse(res, await service.getDeliveryOrderDetail(req.params.id));
   } catch (err) { next(err); }
 }
 
 async function confirm(req, res, next) {
   try {
-    const data = await service.confirmDelivery(req.body);
-    res.json(data);
+    const result = await service.confirmDelivery(req.body);
+    return successResponse(res, result, result);
   } catch (err) { next(err); }
 }
 

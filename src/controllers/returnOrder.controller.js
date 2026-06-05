@@ -1,44 +1,45 @@
 const service = require('../services/returnOrder.service');
+const { successResponse, createdResponse } = require('../utils/response.util');
 
 async function list(req, res, next) {
   try {
     const result = await service.listReturnOrders(req.query);
-    res.json({ ok: true, rows: result.rows, data: result.rows, total: result.total });
+    return successResponse(res, result.rows, { rows: result.rows, total: result.total });
   } catch (err) { next(err); }
 }
 
 async function getById(req, res, next) {
   try {
     const returnOrder = await service.getReturnOrder(req.params.id);
-    res.json({ ok: true, returnOrder, data: returnOrder });
+    return successResponse(res, returnOrder, { returnOrder });
   } catch (err) { next(err); }
 }
 
 async function getBySalesOrder(req, res, next) {
   try {
     const result = await service.getReturnOrdersBySalesOrder(req.params.salesOrderId);
-    res.json({ ok: true, rows: result.rows, data: result.rows, total: result.total });
+    return successResponse(res, result.rows, { rows: result.rows, total: result.total });
   } catch (err) { next(err); }
 }
 
 async function create(req, res, next) {
   try {
     const returnOrder = await service.createOrUpdateReturnOrder(req.body);
-    res.status(201).json({ ok: true, returnOrder, data: returnOrder, message: 'Tạo/cập nhật phiếu trả hàng thành công' });
+    return createdResponse(res, returnOrder, { returnOrder, message: 'Tạo/cập nhật phiếu trả hàng thành công' });
   } catch (err) { next(err); }
 }
 
 async function update(req, res, next) {
   try {
     const returnOrder = await service.updateReturnOrder(req.params.id, req.body);
-    res.json({ ok: true, returnOrder, data: returnOrder, message: 'Cập nhật phiếu trả hàng thành công' });
+    return successResponse(res, returnOrder, { returnOrder, message: 'Cập nhật phiếu trả hàng thành công' });
   } catch (err) { next(err); }
 }
 
 async function remove(req, res, next) {
   try {
     const returnOrder = await service.cancelReturnOrder(req.params.id, req.body && req.body.reason);
-    res.json({ ok: true, returnOrder, data: returnOrder, message: 'Đã hủy mềm phiếu trả hàng' });
+    return successResponse(res, returnOrder, { returnOrder, message: 'Đã hủy mềm phiếu trả hàng' });
   } catch (err) { next(err); }
 }
 
@@ -48,7 +49,7 @@ async function accountingConfirm(req, res, next) {
       req.params.id,
       (req.body && (req.body.confirmedBy || req.body.userCode)) || ''
     );
-    res.json({ ok: true, returnOrder, data: returnOrder, message: 'Kế toán đã xác nhận phiếu trả hàng' });
+    return successResponse(res, returnOrder, { returnOrder, message: 'Kế toán đã xác nhận phiếu trả hàng' });
   } catch (err) { next(err); }
 }
 

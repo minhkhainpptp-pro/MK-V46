@@ -4,6 +4,9 @@ const SalesOrder = require('../models/SalesOrder');
 const { normalizeOrderCode } = require('../utils/normalizeCode');
 const { roundMoney } = require('../utils/money.util');
 const { createArOnce, createInventoryOnce, createJournalOnce } = require('./accountingService');
+const { validateReturnPayload } = require('../utils/validation.util');
+const { withTransaction, acquireOperation, completeOperation } = require('../core/operationGuard');
+const { writeAuditLog } = require('../core/audit');
 
 const EDITABLE_STATUS = ['pending'];
 
@@ -39,20 +42,26 @@ function findSalesOrderFilter(key) {
   return { $or: or };
 }
 
-async function findSalesOrderOrThrow(input) {
+async function findSalesOrderOrThrow(input, options = {}) {
+  const session = options.session;
   const key = input.salesOrderId || input.salesOrderCode || input.id || input.code;
   const filter = findSalesOrderFilter(key);
   if (!filter) throw httpError('Thiếu salesOrderId hoặc salesOrderCode', 400);
-  const order = await SalesOrder.findOne(filter).lean();
+  const orderQuery = SalesOrder.findOne(filter);
+  if (session) orderQuery.session(session);
+  const order = await orderQuery.lean();
   if (!order) throw httpError('Không tìm thấy đơn bán để tạo hàng trả', 404);
   return order;
 }
 
-async function findReturnOrderOrThrow(id) {
+async function findReturnOrderOrThrow(id, options = {}) {
+  const session = options.session;
   const key = cleanText(id);
   const or = [{ id: key }, { code: key }];
   if (mongoose.Types.ObjectId.isValid(key)) or.push({ _id: key });
-  const order = await ReturnOrder.findOne({ $or: or }).lean();
+  const query = ReturnOrder.findOne({ $or: or });
+  if (session) query.session(session);
+  const order = await query.lean();
   if (!order) throw httpError('Không tìm thấy phiếu trả hàng', 404);
   return order;
 }
@@ -119,17 +128,47 @@ function buildFilter(query = {}) {
   return filter;
 }
 
-async function createOrUpdateReturnOrder(input) {
-  const salesOrder = await findSalesOrderOrThrow(input);
+async function createOrUpdateReturnOrder(input, options = {}) {
+  validateReturnPayload(input);
+  if (options.session) return createOrUpdateReturnOrderCore(input, options);
+
+  const operationId = cleanText(input.operationId) || `RETURN:${cleanText(input.salesOrderId || input.salesOrderCode || input.id || input.code)}`;
+  return withTransaction(async (session) => {
+    await acquireOperation({
+      operationId,
+      type: 'CREATE_RETURN_ORDER',
+      referenceId: cleanText(input.salesOrderId || input.salesOrderCode || input.id || input.code),
+      referenceCode: cleanText(input.salesOrderCode || input.code),
+      userCode: cleanText(input.createdBy || input.userCode),
+    }, session);
+    const result = await createOrUpdateReturnOrderCore(input, { session });
+    await writeAuditLog({
+      module: 'ReturnOrder',
+      action: 'CREATE_OR_UPDATE_RETURN',
+      referenceId: result.id,
+      referenceCode: result.code,
+      userCode: cleanText(input.createdBy || input.userCode),
+      after: result,
+    }, session);
+    await completeOperation(operationId, { returnOrderId: result.id, returnOrderCode: result.code }, session);
+    return result;
+  });
+}
+
+async function createOrUpdateReturnOrderCore(input, options = {}) {
+  const session = options.session;
+  const salesOrder = await findSalesOrderOrThrow(input, { session });
   const salesOrderId = cleanText(salesOrder.id || salesOrder._id);
   const salesOrderCode = cleanText(salesOrder.code);
   const items = normalizeReturnItems(input.items || input.returnLines, salesOrder);
   const totals = calculateReturnOrderTotals(items);
 
-  const existed = await ReturnOrder.findOne({
+  const existedQuery = ReturnOrder.findOne({
     status: { $ne: 'cancelled' },
     $or: [{ salesOrderId }, { salesOrderCode }],
-  }).lean();
+  });
+  if (session) existedQuery.session(session);
+  const existed = await existedQuery.lean();
 
   const payload = {
     id: cleanText(input.id) || buildReturnOrderCode(salesOrderCode),
@@ -137,6 +176,8 @@ async function createOrUpdateReturnOrder(input) {
     salesOrderId,
     salesOrderCode,
     normalizedSalesOrderCode: normalizeOrderCode(salesOrderCode),
+    masterOrderId: salesOrder.masterOrderId || '',
+    masterOrderCode: salesOrder.masterOrderCode || '',
     customerCode: salesOrder.customerCode || '',
     customerName: salesOrder.customerName || '',
     salesStaffCode: salesOrder.salesStaffCode || '',
@@ -156,10 +197,12 @@ async function createOrUpdateReturnOrder(input) {
     if (!EDITABLE_STATUS.includes(existed.status)) {
       throw httpError('Phiếu trả đã xác nhận hoặc đã hủy, không được cập nhật', 409);
     }
-    return ReturnOrder.findByIdAndUpdate(existed._id, { $set: payload }, { new: true }).lean();
+    const updateQuery = ReturnOrder.findByIdAndUpdate(existed._id, { $set: payload }, { new: true });
+    if (session) updateQuery.session(session);
+    return updateQuery.lean();
   }
 
-  const doc = await ReturnOrder.create(payload);
+  const [doc] = await ReturnOrder.create([payload], session ? { session } : undefined);
   return doc.toObject();
 }
 
@@ -228,8 +271,34 @@ async function cancelReturnOrder(id, reason = '') {
   }, { new: true }).lean();
 }
 
-async function accountingConfirmReturnOrder(id, confirmedBy = '') {
-  const existing = await findReturnOrderOrThrow(id);
+async function accountingConfirmReturnOrder(id, confirmedBy = '', options = {}) {
+  if (options.session) return accountingConfirmReturnOrderCore(id, confirmedBy, options);
+
+  const operationId = cleanText(options.operationId) || `ACCOUNTING_RETURN:${cleanText(id)}`;
+  return withTransaction(async (session) => {
+    await acquireOperation({
+      operationId,
+      type: 'ACCOUNTING_CONFIRM_RETURN',
+      referenceId: cleanText(id),
+      userCode: cleanText(confirmedBy),
+    }, session);
+    const result = await accountingConfirmReturnOrderCore(id, confirmedBy, { session });
+    await writeAuditLog({
+      module: 'ReturnOrder',
+      action: 'ACCOUNTING_CONFIRM_RETURN',
+      referenceId: result.id,
+      referenceCode: result.code,
+      userCode: cleanText(confirmedBy),
+      after: result,
+    }, session);
+    await completeOperation(operationId, { returnOrderId: result.id, returnOrderCode: result.code }, session);
+    return result;
+  });
+}
+
+async function accountingConfirmReturnOrderCore(id, confirmedBy = '', options = {}) {
+  const session = options.session;
+  const existing = await findReturnOrderOrThrow(id, { session });
   if (['confirmed', 'posted'].includes(existing.accountingStatus) || ['confirmed', 'posted'].includes(existing.status)) {
     throw httpError('Phiếu trả đã được kế toán xác nhận', 409);
   }
@@ -256,7 +325,7 @@ async function accountingConfirmReturnOrder(id, confirmedBy = '') {
     sourceId: roId,
     sourceCode: existing.code,
     createdBy: confirmedBy,
-  }) : null;
+  }, { session }) : null;
 
   const inventoryLedgers = [];
   const journals = [];
@@ -278,7 +347,7 @@ async function accountingConfirmReturnOrder(id, confirmedBy = '') {
       referenceCode: existing.code,
       note: 'Nhập kho hàng trả khi kế toán xác nhận phiếu trả',
       createdBy: confirmedBy,
-    });
+    }, { session });
     if (inv) inventoryLedgers.push(inv);
   }
 
@@ -302,11 +371,11 @@ async function accountingConfirmReturnOrder(id, confirmedBy = '') {
         { accountCode: 'HANGTRA', accountName: 'Hàng bán bị trả lại', debit: amount, credit: 0 },
         { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: amount },
       ],
-    });
+    }, { session });
     if (journal) journals.push(journal);
   }
 
-  const updated = await ReturnOrder.findByIdAndUpdate(existing._id, {
+  const updateQuery = ReturnOrder.findByIdAndUpdate(existing._id, {
     $set: {
       status: 'posted',
       accountingStatus: 'posted',
@@ -314,7 +383,9 @@ async function accountingConfirmReturnOrder(id, confirmedBy = '') {
       confirmedBy: cleanText(confirmedBy),
       arPosted: !!arLedger,
     },
-  }, { new: true }).lean();
+  }, { new: true });
+  if (session) updateQuery.session(session);
+  const updated = await updateQuery.lean();
   return { ...updated, arLedger, inventoryLedgers, journals };
 }
 

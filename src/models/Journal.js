@@ -10,28 +10,27 @@ const JournalLineSchema = new mongoose.Schema({
 }, { _id: false });
 
 const schema = createBaseSchema({
-  code: { type: String, required: true, index: true },
+  code: { type: String, required: true },
   type: {
     type: String,
     enum: ['SALE', 'RETURN', 'RECEIPT', 'PAYMENT', 'INVENTORY_OUT', 'INVENTORY_IN', 'BONUS'],
     required: true,
-    index: true,
   },
-  date: { type: String, required: true, index: true },
+  date: { type: String, required: true },
 
-  customerCode: { type: String, default: '', index: true },
+  customerCode: { type: String, default: '' },
   customerName: { type: String, default: '' },
 
-  salesOrderId: { type: String, default: '', index: true },
-  salesOrderCode: { type: String, default: '', index: true },
-  masterOrderId: { type: String, default: '', index: true },
-  masterOrderCode: { type: String, default: '', index: true },
+  salesOrderId: { type: String, default: '' },
+  salesOrderCode: { type: String, default: '' },
+  masterOrderId: { type: String, default: '' },
+  masterOrderCode: { type: String, default: '' },
 
   amount: { type: Number, default: 0 },
   lines: { type: [JournalLineSchema], default: [] },
 
-  sourceType: { type: String, default: '', index: true },
-  sourceId: { type: String, default: '', index: true },
+  sourceType: { type: String, default: '' },
+  sourceId: { type: String, default: '' },
   sourceCode: { type: String, default: '' },
   note: { type: String, default: '' },
 });

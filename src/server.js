@@ -10,6 +10,9 @@ const bootstrap = require('./core/bootstrap');
 const { ensureMongoIndexes } = require('./core/ensureMongoIndexes');
 const { seedDefaults } = require('./core/seedDefaults');
 
+const apiMonitorMiddleware = require('./middlewares/apiMonitor.middleware');
+const { errorResponse } = require('./utils/response.util');
+
 const app = express();
 
 app.use(helmet({
@@ -19,6 +22,7 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('tiny'));
+app.use(apiMonitorMiddleware);
 
 // Static UI, if public files exist.
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -60,19 +64,12 @@ app.use('/api/inventory', require('./routes/inventory.routes'));
 app.use('/api/reports', require('./routes/report.routes'));
 
 app.use((req, res) => {
-  res.status(404).json({
-    ok: false,
-    message: 'API not found',
-    path: req.originalUrl,
-  });
+  return errorResponse(res, 'API not found', 404, { path: req.originalUrl });
 });
 
 app.use((err, req, res, next) => {
   console.error('[ERROR]', err);
-  res.status(err.status || 500).json({
-    ok: false,
-    message: err.message || 'Server error',
-  });
+  return errorResponse(res, err.message || 'Server error', err.status || 500, { requestId: req.requestId });
 });
 
 async function main() {

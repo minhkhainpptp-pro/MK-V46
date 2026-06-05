@@ -3,7 +3,7 @@ const { createBaseSchema } = require('../core/baseSchema');
 
 const SalesOrderItemSchema = new mongoose.Schema({
   productId: { type: String, default: '' },
-  productCode: { type: String, required: true, index: true },
+  productCode: { type: String, required: true },
   productName: { type: String, default: '' },
   unit: { type: String, default: '' },
   quantity: { type: Number, required: true, min: 0 },
@@ -17,22 +17,22 @@ const SalesOrderItemSchema = new mongoose.Schema({
 }, { _id: false });
 
 const schema = createBaseSchema({
-  code: { type: String, required: true, unique: true, index: true },
-  normalizedCode: { type: String, required: true, unique: true, index: true },
+  code: { type: String, required: true, unique: true },
+  normalizedCode: { type: String, required: true, unique: true },
 
   customerId: { type: String, default: '' },
-  customerCode: { type: String, required: true, index: true },
-  customerName: { type: String, required: true, index: true },
+  customerCode: { type: String, required: true },
+  customerName: { type: String, required: true },
   customerPhone: { type: String, default: '' },
   customerAddress: { type: String, default: '' },
 
-  salesStaffCode: { type: String, default: '', index: true },
+  salesStaffCode: { type: String, default: '' },
   salesStaffName: { type: String, default: '' },
-  deliveryStaffCode: { type: String, default: '', index: true },
+  deliveryStaffCode: { type: String, default: '' },
   deliveryStaffName: { type: String, default: '' },
-  deliveryDate: { type: String, default: '', index: true },
+  deliveryDate: { type: String, default: '' },
 
-  source: { type: String, enum: ['MANUAL', 'DMS', 'S3', 'MOBILE', 'manual', 'dms', 's3', 'mobile'], default: 'MANUAL', index: true },
+  source: { type: String, enum: ['MANUAL', 'DMS', 'S3', 'MOBILE', 'manual', 'dms', 's3', 'mobile'], default: 'MANUAL' },
   items: { type: [SalesOrderItemSchema], default: [] },
   itemCount: { type: Number, default: 0 },
 
@@ -41,12 +41,12 @@ const schema = createBaseSchema({
   payableAmount: { type: Number, default: 0 },
   finalAmount: { type: Number, default: 0 },
 
-  status: { type: String, enum: ['pending', 'assigned', 'delivered', 'cancelled', 'accounting_confirmed'], default: 'pending', index: true },
-  deliveryStatus: { type: String, enum: ['pending', 'assigned', 'delivered', 'failed', 'cancelled'], default: 'pending', index: true },
-  accountingStatus: { type: String, enum: ['pending', 'posted', 'cancelled', 'confirmed'], default: 'pending', index: true },
+  status: { type: String, enum: ['pending', 'assigned', 'delivered', 'cancelled', 'accounting_confirmed'], default: 'pending' },
+  deliveryStatus: { type: String, enum: ['pending', 'assigned', 'delivered', 'failed', 'cancelled'], default: 'pending' },
+  accountingStatus: { type: String, enum: ['pending', 'posted', 'cancelled', 'confirmed'], default: 'pending' },
 
-  masterOrderId: { type: String, default: '', index: true },
-  masterOrderCode: { type: String, default: '', index: true },
+  masterOrderId: { type: String, default: '' },
+  masterOrderCode: { type: String, default: '' },
 
   cashAmount: { type: Number, default: 0 },
   bankAmount: { type: Number, default: 0 },

@@ -18,7 +18,7 @@ const schema = createBaseSchema({
   deliveryStaffCode: { type: String, default: '', trim: true },
   deliveryStaffName: { type: String, default: '', trim: true },
 
-  isActive: { type: Boolean, default: true, index: true },
+  isActive: { type: Boolean, default: true },
 });
 
 // Keep base `code` as a compatibility/business alias, but customerCode is the canonical key.

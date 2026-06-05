@@ -2,11 +2,11 @@ const mongoose = require('mongoose');
 const { generateId } = require('../utils/id.util');
 
 const BaseFields = {
-  id: { type: String, index: true },
-  code: { type: String, index: true },
+  id: { type: String },
+  code: { type: String },
   createdBy: { type: String, default: '' },
   updatedBy: { type: String, default: '' },
-  status: { type: String, default: 'active', index: true },
+  status: { type: String, default: 'active' },
 };
 
 function createBaseSchema(fields = {}) {
@@ -15,11 +15,12 @@ function createBaseSchema(fields = {}) {
     { timestamps: true }
   );
 
-  // Common id/code/status are indexed at field level. Avoid declaring
-  // duplicated schema.index() entries because Mongoose 8 warns and Render logs become noisy.
+  // Only declare shared base indexes once here. Business-specific indexes
+  // (code unique, status+date, customerCode...) must stay in each model or
+  // ensureMongoIndexes.js to avoid duplicate schema index warnings.
+  schema.index({ id: 1 }, { name: 'idx_base_id' });
 
-  // Mongoose 8 supports promise/sync middleware. Do not call next() here;
-  // Render was failing on POST with: "next is not a function".
+  // Mongoose 8 supports promise/sync middleware. Do not call next() here.
   schema.pre('validate', function assignStableId() {
     if (!this.id) this.id = generateId();
   });

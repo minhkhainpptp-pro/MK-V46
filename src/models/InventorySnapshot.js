@@ -2,12 +2,12 @@ const mongoose = require('mongoose');
 const { createBaseSchema } = require('../core/baseSchema');
 
 const schema = createBaseSchema({
-  productId: { type: String, required: true, index: true },
-  productCode: { type: String, default: '', index: true },
+  productId: { type: String, required: true },
+  productCode: { type: String, default: '' },
   productName: { type: String, default: '' },
 
-  warehouseId: { type: String, required: true, index: true },
-  warehouseCode: { type: String, default: '', index: true },
+  warehouseId: { type: String, required: true },
+  warehouseCode: { type: String, default: '' },
   warehouseName: { type: String, default: '' },
 
   qty: { type: Number, required: true, default: 0 },

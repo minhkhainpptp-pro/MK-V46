@@ -1,4 +1,5 @@
 const Customer = require('../models/Customer');
+const { validateCustomerPayload } = require('../utils/validation.util');
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -98,6 +99,7 @@ async function getCustomer(id) {
 }
 
 async function createCustomer(input = {}) {
+  validateCustomerPayload(input);
   const payload = normalizeCustomerPayload(input);
 
   if (!payload.customerCode) throw Object.assign(new Error('Thiếu mã khách hàng'), { status: 400 });

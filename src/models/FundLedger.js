@@ -2,20 +2,20 @@ const mongoose = require('mongoose');
 const { createBaseSchema } = require('../core/baseSchema');
 
 const schema = createBaseSchema({
-  code: { type: String, required: true, index: true },
-  type: { type: String, enum: ['CASH_RECEIPT', 'BANK_RECEIPT', 'CASH_PAYMENT', 'BANK_DEPOSIT', 'BONUS_PAYMENT'], required: true, index: true },
-  method: { type: String, enum: ['cash', 'bank', 'other'], default: 'cash', index: true },
+  code: { type: String, required: true },
+  type: { type: String, enum: ['CASH_RECEIPT', 'BANK_RECEIPT', 'CASH_PAYMENT', 'BANK_DEPOSIT', 'BONUS_PAYMENT'], required: true },
+  method: { type: String, enum: ['cash', 'bank', 'other'], default: 'cash' },
   amount: { type: Number, required: true, default: 0 },
-  date: { type: String, required: true, index: true },
-  customerCode: { type: String, default: '', index: true },
+  date: { type: String, required: true },
+  customerCode: { type: String, default: '' },
   customerName: { type: String, default: '' },
-  salesOrderId: { type: String, default: '', index: true },
+  salesOrderId: { type: String, default: '' },
   salesOrderCode: { type: String, default: '' },
-  masterOrderId: { type: String, default: '', index: true },
+  masterOrderId: { type: String, default: '' },
   masterOrderCode: { type: String, default: '' },
   note: { type: String, default: '' },
-  sourceType: { type: String, default: '', index: true },
-  sourceId: { type: String, default: '', index: true },
+  sourceType: { type: String, default: '' },
+  sourceId: { type: String, default: '' },
 });
 
 schema.index({ date: 1, type: 1 }, { name: 'idx_fund_date_type' });

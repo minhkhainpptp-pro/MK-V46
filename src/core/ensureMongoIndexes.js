@@ -11,6 +11,9 @@ const Warehouse = require('../models/Warehouse');
 const Inventory = require('../models/Inventory');
 const InventorySnapshot = require('../models/InventorySnapshot');
 const Journal = require('../models/Journal');
+const OperationLog = require('../models/OperationLog');
+const AuditLog = require('../models/AuditLog');
+const ApiLog = require('../models/ApiLog');
 
 async function dropIndexIfExists(collection, indexName) {
   const indexes = await collection.indexes();
@@ -89,7 +92,7 @@ async function safeCreateIndex(collection, keys, options = {}) {
   try {
     return await collection.createIndex(keys, options);
   } catch (err) {
-    if (err && (err.code === 85 || err.codeName === 'IndexOptionsConflict')) {
+    if (err && (err.code === 85 || err.code === 86 || err.codeName === 'IndexOptionsConflict' || err.codeName === 'IndexKeySpecsConflict')) {
       console.warn('[INDEX_SKIP_CONFLICT]', collection.collectionName, options.name || JSON.stringify(keys));
       return null;
     }
@@ -169,6 +172,14 @@ async function ensureMongoIndexes() {
       { sourceType: 1, sourceId: 1, type: 1 },
       { name: 'idx_journal_source_type_id_type_unique', unique: true, partialFilterExpression: { sourceType: { $type: 'string' }, sourceId: { $type: 'string' }, type: { $type: 'string' } } }
     ),
+
+    safeCreateIndex(OperationLog.collection, { operationId: 1 }, { name: 'idx_operation_id_unique', unique: true }),
+    safeCreateIndex(OperationLog.collection, { type: 1, referenceId: 1 }, { name: 'idx_operation_type_reference' }),
+    safeCreateIndex(AuditLog.collection, { module: 1, action: 1, createdAt: -1 }, { name: 'idx_audit_module_action_created' }),
+    safeCreateIndex(AuditLog.collection, { referenceId: 1 }, { name: 'idx_audit_reference_id' }),
+    safeCreateIndex(ApiLog.collection, { createdAt: -1 }, { name: 'idx_api_log_created_at' }),
+    safeCreateIndex(ApiLog.collection, { path: 1, createdAt: -1 }, { name: 'idx_api_log_path_created' }),
+    safeCreateIndex(ApiLog.collection, { ms: -1, createdAt: -1 }, { name: 'idx_api_log_ms_created' }),
   ]);
   console.log('[DB] Indexes ensured');
 }

@@ -6,6 +6,7 @@ const Product = require('../models/Product');
 const User = require('../models/User');
 const { normalizeOrderCode } = require('../utils/normalizeCode');
 const { roundMoney } = require('../utils/money.util');
+const { validateSalesOrderPayload } = require('../utils/validation.util');
 
 const EDITABLE_STATUS = ['pending'];
 const MAX_LIMIT = 200;
@@ -96,6 +97,7 @@ async function findSalesOrderOrThrow(id) {
 }
 
 async function createSalesOrder(input = {}) {
+  validateSalesOrderPayload(input);
   const code = cleanText(input.code || buildOrderCode());
   const normalizedCode = normalizeOrderCode(code);
   const duplicated = await SalesOrder.exists({ $or: [{ code }, { normalizedCode }] });

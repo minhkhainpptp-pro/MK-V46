@@ -1,4 +1,5 @@
 const Product = require('../models/Product');
+const { validateProductPayload } = require('../utils/validation.util');
 
 function buildProductFilter(query = {}) {
   const filter = {};
@@ -31,6 +32,7 @@ async function getProduct(id) {
 }
 
 async function createProduct(input = {}) {
+  validateProductPayload(input);
   const payload = {
     code: String(input.code || '').trim(),
     name: String(input.name || '').trim(),

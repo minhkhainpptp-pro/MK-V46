@@ -12,4 +12,7 @@ module.exports = {
   Inventory: require('./Inventory'),
   InventorySnapshot: require('./InventorySnapshot'),
   Journal: require('./Journal'),
+  OperationLog: require('./OperationLog'),
+  AuditLog: require('./AuditLog'),
+  ApiLog: require('./ApiLog'),
 };

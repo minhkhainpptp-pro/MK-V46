@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const { createBaseSchema } = require('../core/baseSchema');
 
 const ReturnItemSchema = new mongoose.Schema({
-  productCode: { type: String, required: true, index: true },
+  productCode: { type: String, required: true },
   productName: { type: String, default: '' },
   orderedQty: { type: Number, default: 0 },
   deliveredQty: { type: Number, default: 0 },
@@ -14,16 +14,16 @@ const ReturnItemSchema = new mongoose.Schema({
 }, { _id: false });
 
 const schema = createBaseSchema({
-  code: { type: String, required: true, index: true },
-  salesOrderId: { type: String, required: true, index: true },
-  salesOrderCode: { type: String, required: true, index: true },
-  normalizedSalesOrderCode: { type: String, default: '', index: true },
-  masterOrderId: { type: String, default: '', index: true },
-  masterOrderCode: { type: String, default: '', index: true },
+  code: { type: String, required: true },
+  salesOrderId: { type: String, required: true },
+  salesOrderCode: { type: String, required: true },
+  normalizedSalesOrderCode: { type: String, default: '' },
+  masterOrderId: { type: String, default: '' },
+  masterOrderCode: { type: String, default: '' },
 
-  customerCode: { type: String, default: '', index: true },
+  customerCode: { type: String, default: '' },
   customerName: { type: String, default: '' },
-  productCode: { type: String, default: '', index: true },
+  productCode: { type: String, default: '' },
   productName: { type: String, default: '' },
   returnQty: { type: Number, default: 0 },
   price: { type: Number, default: 0 },
@@ -33,14 +33,14 @@ const schema = createBaseSchema({
   totalReturnQty: { type: Number, default: 0 },
   totalReturnAmount: { type: Number, default: 0 },
 
-  deliveryDate: { type: String, default: '', index: true },
-  deliveryStaffCode: { type: String, default: '', index: true },
+  deliveryDate: { type: String, default: '' },
+  deliveryStaffCode: { type: String, default: '' },
   deliveryStaffName: { type: String, default: '' },
-  salesStaffCode: { type: String, default: '', index: true },
+  salesStaffCode: { type: String, default: '' },
   salesStaffName: { type: String, default: '' },
 
-  status: { type: String, enum: ['pending', 'active', 'cancelled', 'posted', 'confirmed'], default: 'active', index: true },
-  accountingStatus: { type: String, enum: ['pending', 'posted', 'cancelled', 'confirmed'], default: 'pending', index: true },
+  status: { type: String, enum: ['pending', 'active', 'cancelled', 'posted', 'confirmed'], default: 'active' },
+  accountingStatus: { type: String, enum: ['pending', 'posted', 'cancelled', 'confirmed'], default: 'pending' },
   cancelledAt: { type: Date },
   cancelReason: { type: String, default: '' },
   confirmedAt: { type: Date },
