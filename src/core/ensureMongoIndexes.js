@@ -79,7 +79,8 @@ async function repairCustomerCatalog() {
           },
         },
       },
-    ]
+    ],
+    { updatePipeline: true }
   );
 }
 
