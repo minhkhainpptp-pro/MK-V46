@@ -12,6 +12,40 @@ const Inventory = require('../models/Inventory');
 const InventorySnapshot = require('../models/InventorySnapshot');
 
 async function ensureMongoIndexes() {
+  // Backfill legacy customer fields before creating canonical indexes.
+  // Old versions used code/name; V46 catalog uses customerCode/customerName.
+  await Customer.updateMany(
+    {
+      $or: [
+        { customerCode: { $exists: false } },
+        { customerCode: '' },
+        { customerName: { $exists: false } },
+        { customerName: '' },
+      ],
+    },
+    [
+      {
+        $set: {
+          customerCode: {
+            $ifNull: ['$customerCode', '$code'],
+          },
+          customerName: {
+            $ifNull: ['$customerName', '$name'],
+          },
+          code: {
+            $ifNull: ['$code', '$customerCode'],
+          },
+          name: {
+            $ifNull: ['$name', '$customerName'],
+          },
+          isActive: {
+            $ifNull: ['$isActive', true],
+          },
+        },
+      },
+    ]
+  );
+
   await Promise.all([
     SalesOrder.collection.createIndex({ code: 1 }, { name: 'idx_so_code_unique', unique: true }),
     SalesOrder.collection.createIndex({ id: 1 }, { name: 'idx_so_id' }),
@@ -41,10 +75,18 @@ async function ensureMongoIndexes() {
     Product.collection.createIndex({ code: 1 }, { name: 'idx_product_code_unique', unique: true }),
     Product.collection.createIndex({ name: 1 }, { name: 'idx_product_name' }),
     Product.collection.createIndex({ barcode: 1 }, { name: 'idx_product_barcode' }),
-    Customer.collection.createIndex({ code: 1 }, { name: 'idx_customer_code_unique', unique: true }),
-    Customer.collection.createIndex({ name: 1 }, { name: 'idx_customer_name' }),
-    Customer.collection.createIndex({ salesStaffCode: 1 }, { name: 'idx_customer_sales_staff' }),
-    Customer.collection.createIndex({ deliveryStaffCode: 1 }, { name: 'idx_customer_delivery_staff' }),
+    Customer.collection.createIndex(
+      { customerCode: 1 },
+      {
+        name: 'idx_customer_customer_code_unique',
+        unique: true,
+        partialFilterExpression: { customerCode: { $type: 'string', $gt: '' } },
+      }
+    ),
+    Customer.collection.createIndex({ salesStaffCode: 1 }, { name: 'idx_customer_sales_staff_code' }),
+    Customer.collection.createIndex({ deliveryStaffCode: 1 }, { name: 'idx_customer_delivery_staff_code' }),
+    Customer.collection.createIndex({ routeCode: 1 }, { name: 'idx_customer_route_code' }),
+    Customer.collection.createIndex({ customerName: 'text', customerCode: 'text', phone: 'text' }, { name: 'idx_customer_search_text' }),
     User.collection.createIndex({ code: 1 }, { name: 'idx_user_code_unique', unique: true }),
     User.collection.createIndex({ username: 1 }, { name: 'idx_user_username_unique', unique: true }),
     User.collection.createIndex({ roleCode: 1 }, { name: 'idx_user_role_code' }),

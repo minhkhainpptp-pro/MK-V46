@@ -23,9 +23,15 @@
   async function search(endpoint, keyword, options) {
     const q = String(keyword || '').trim();
     const limit = Math.min(Number((options && options.limit) || DEFAULT_LIMIT), 50);
-    const key = endpoint + '|' + normalizeText(q) + '|' + limit;
+    const params = { q, keyword: q, limit: String(limit) };
+    Object.keys(options || {}).forEach((name) => {
+      if (options[name] !== undefined && options[name] !== null && options[name] !== '') {
+        params[name] = String(options[name]);
+      }
+    });
+    const key = endpoint + '|' + normalizeText(q) + '|' + JSON.stringify(params);
     if (cache.has(key)) return cache.get(key);
-    const url = endpoint + '?' + new URLSearchParams({ q, keyword: q, limit: String(limit) }).toString();
+    const url = endpoint + '?' + new URLSearchParams(params).toString();
     const data = await requestJson(url);
     const rows = data.rows || data.data || [];
     cache.set(key, rows);
@@ -34,6 +40,7 @@
 
   global.UnifiedSearchEngine = {
     normalizeText,
+    // Customer search is intentionally limited to customerCode, customerName and phone on the API.
     searchCustomer: (keyword, options) => search('/api/customers', keyword, options),
     searchProduct: (keyword, options) => search('/api/products', keyword, options),
     searchSalesStaff: (keyword, options) => search('/api/users', keyword, { ...(options || {}), role: 'sales' }),
