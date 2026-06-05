@@ -25,6 +25,44 @@ function requireInventoryAdmin(req, res, next) {
   return next(err);
 }
 
+
+router.get('/balance', async (req, res, next) => {
+  try {
+    const Inventory = require('../models/Inventory');
+    const match = {};
+    if (req.query.productCode) match.productCode = String(req.query.productCode).trim();
+    if (req.query.warehouseCode) match.warehouseCode = String(req.query.warehouseCode).trim();
+    if (req.query.productId) match.productId = String(req.query.productId).trim();
+    if (req.query.warehouseId) match.warehouseId = String(req.query.warehouseId).trim();
+    const rows = await Inventory.aggregate([
+      { $match: match },
+      { $group: {
+        _id: { productId: '$productId', warehouseId: '$warehouseId' },
+        productId: { $first: '$productId' },
+        productCode: { $first: '$productCode' },
+        productName: { $first: '$productName' },
+        warehouseId: { $first: '$warehouseId' },
+        warehouseCode: { $first: '$warehouseCode' },
+        warehouseName: { $first: '$warehouseName' },
+        qty: { $sum: '$qty' },
+        inQty: { $sum: { $cond: [{ $gt: ['$qty', 0] }, '$qty', 0] } },
+        outQty: { $sum: { $cond: [{ $lt: ['$qty', 0] }, { $abs: '$qty' }, 0] } },
+      } },
+      { $match: (req.query.onlyPositive === '1' || req.query.onlyPositive === true) ? { qty: { $gt: 0 } } : {} },
+      { $sort: { productCode: 1, warehouseCode: 1 } },
+      { $limit: Math.min(Number(req.query.limit || 500), 5000) },
+    ]);
+    sendOk(res, { rows, data: rows, total: rows.length, source: 'inventories' });
+  } catch (err) { next(err); }
+});
+
+router.get('/', async (req, res, next) => {
+  try {
+    const result = await inventoryService.listLedger(req.query);
+    sendOk(res, { data: result.rows, rows: result.rows, total: result.total, source: result.source });
+  } catch (err) { next(err); }
+});
+
 router.get('/stock', async (req, res, next) => {
   try {
     const result = await inventoryService.getWarehouseSnapshotStocks(req.query);

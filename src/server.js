@@ -50,6 +50,8 @@ app.use('/api/health', require('./routes/health.routes'));
 app.use('/api/products', require('./routes/product.routes'));
 app.use('/api/customers', require('./routes/customer.routes'));
 app.use('/api/users', require('./routes/user.routes'));
+app.use('/api/warehouses', require('./routes/warehouse.routes'));
+app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/sales-orders', require('./routes/salesOrder.routes'));
 app.use('/api/master-orders', require('./routes/masterOrder.routes'));
 app.use('/api/return-orders', require('./routes/returnOrder.routes'));

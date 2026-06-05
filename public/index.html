@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MK-V46 ERP/DMS</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/delivery.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="title">MK-V46 Clean Core</div>
+        <div class="sub">ERP/DMS NPP Minh Khai</div>
+      </div>
+      <div class="nav">
+        <button data-page="dashboard">Dashboard</button>
+        <button data-page="catalog">Danh mục</button>
+        <button data-page="sales-orders">Đơn bán</button>
+        <button data-page="master-orders">Đơn tổng</button>
+        <button data-page="delivery">Giao hàng</button>
+        <button data-page="returns">Trả hàng</button>
+        <button data-page="accounting" data-role-only="admin,accountant">Xác nhận kế toán</button>
+        <button data-page="debts">Công nợ</button>
+        <button data-page="inventory">Tồn kho</button>
+        <button data-page="import-dms" data-role-only="admin,accountant">Import DMS</button>
+        <button data-page="system">Hệ thống</button>
+      </div>
+      <div class="sidebar-footer">
+        <label style="color:#cbd5e1">Vai trò thao tác</label>
+        <select id="roleSelect">
+          <option value="admin">admin</option>
+          <option value="accountant">accountant</option>
+          <option value="sales">sales</option>
+          <option value="delivery">delivery</option>
+          <option value="warehouse">warehouse</option>
+          <option value="viewer">viewer</option>
+        </select>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="header">
+        <div><h1 id="pageTitle">Dashboard</h1><div id="pageSubtitle" class="subtitle"></div></div>
+        <div><a href="/sales-app.html" target="_blank">App bán hàng</a></div>
+      </header>
+      <section id="pageContent" class="content"></section>
+    </main>
+  </div>
+  <div id="globalLoading" class="loading-overlay hidden"><div class="loading-box"><b class="loading-text">Đang xử lý...</b></div></div>
+  <div id="toastRoot" class="toast-root"></div>
+
+  <script src="/js/core/apiClient.js"></script>
+  <script src="/js/core/uiNotify.js"></script>
+  <script src="/js/core/format.js"></script>
+  <script src="/js/core/app.js"></script>
+  <script src="/js/search/unifiedSearchEngine.js"></script>
+  <script src="/js/pages/dashboardPage.js"></script>
+  <script src="/js/pages/catalogPage.js"></script>
+  <script src="/js/pages/salesOrderPage.js"></script>
+  <script src="/js/pages/masterOrderPage.js"></script>
+  <script src="/js/pages/deliveryTodayPage.js"></script>
+  <script src="/js/pages/returnPage.js"></script>
+  <script src="/js/pages/accountingConfirmPage.js"></script>
+  <script src="/js/pages/debtPage.js"></script>
+  <script src="/js/pages/inventoryPage.js"></script>
+  <script src="/js/pages/importDmsPage.js"></script>
+  <script src="/js/pages/systemPage.js"></script>
+</body>
+</html>

@@ -8,6 +8,13 @@ router.get('/customers', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+router.get('/customer-detail/:customerCode', async (req, res, next) => {
+  try {
+    const result = await service.getCustomerDebtDetail({ ...req.query, customerCode: req.params.customerCode });
+    res.json({ ok: true, customer: result.customer, rows: result.rows, data: result.rows, summary: result.summary });
+  } catch (e) { next(e); }
+});
+
 router.get('/customer-detail', async (req, res, next) => {
   try {
     const result = await service.getCustomerDebtDetail(req.query);

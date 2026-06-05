@@ -1,0 +1,9 @@
+.delivery-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 10px; }
+.delivery-summary .box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px; }
+.delivery-summary .box b { display: block; font-size: 17px; margin-top: 4px; }
+.return-input { max-width: 100px; }
+.accounting-row-posted { opacity: .68; }
+.mobile-frame { max-width: 520px; margin: 0 auto; background: #fff; min-height: 100vh; border-left: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb; }
+.mobile-tabs { position: sticky; bottom: 0; display: grid; grid-template-columns: repeat(3,1fr); background: #111827; }
+.mobile-tabs button { border-radius: 0; border: 0; color: #d1d5db; background: transparent; }
+.mobile-tabs button.active { color: #fff; background: rgba(255,255,255,.12); }

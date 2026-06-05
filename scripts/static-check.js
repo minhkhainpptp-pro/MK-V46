@@ -25,6 +25,10 @@ const modules = [
   '../src/routes/accounting.routes',
   '../src/routes/report.routes',
   '../src/routes/journal.routes',
+  '../src/routes/debt.routes',
+  '../src/routes/inventory.routes',
+  '../src/routes/warehouse.routes',
+  '../src/routes/auth.routes',
 ];
 
 for (const modulePath of modules) {
