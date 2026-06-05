@@ -8,6 +8,7 @@ const path = require('path');
 
 const { connectDB } = require('./config/db');
 const { ensureMongoIndexes } = require('./core/ensureMongoIndexes');
+const { seedDefaults } = require('./core/seedDefaults');
 
 const app = express();
 
@@ -42,6 +43,9 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/health', require('./routes/health.routes'));
+app.use('/api/products', require('./routes/product.routes'));
+app.use('/api/customers', require('./routes/customer.routes'));
+app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/sales-orders', require('./routes/salesOrder.routes'));
 app.use('/api/master-orders', require('./routes/masterOrder.routes'));
 app.use('/api/mobile/delivery', require('./routes/mobileDelivery.routes'));
@@ -67,6 +71,7 @@ app.use((err, req, res, next) => {
 async function main() {
   await connectDB();
   await ensureMongoIndexes();
+  await seedDefaults();
 
   const port = Number(process.env.PORT || 10000);
   app.listen(port, () => {
