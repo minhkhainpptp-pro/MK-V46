@@ -36,3 +36,26 @@ main().catch(err => {
   console.error('[BOOT_ERROR]', err);
   process.exit(1);
 });
+app.get('/', (req, res) => {
+  res.json({
+    ok: true,
+    app: 'MK-V46 Clean Core',
+    status: 'running'
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    status: 'healthy',
+    time: new Date().toISOString()
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    status: 'healthy',
+    time: new Date().toISOString()
+  });
+});
