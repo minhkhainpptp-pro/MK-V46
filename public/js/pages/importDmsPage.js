@@ -51,7 +51,19 @@
       var sheet = wb.Sheets[wb.SheetNames[0]];
       return window.XLSX.utils.sheet_to_json(sheet, { defval: '' });
     }
-    var text = await file.text();
+    
+    var bufferText = await file.arrayBuffer();
+    var text = '';
+    try {
+      text = new TextDecoder('utf-8').decode(bufferText);
+      if (text.indexOf('�') >= 0) {
+        text = new TextDecoder('windows-1258').decode(bufferText);
+      }
+    } catch (e) {
+      text = await file.text();
+    }
+    text = text.replace(/^\uFEFF/, '');
+
     if (name.endsWith('.json')) return JSON.parse(text);
     var lines = text.split(/\r?\n/).filter(function (x) { return x.trim(); });
     if (!lines.length) return [];
