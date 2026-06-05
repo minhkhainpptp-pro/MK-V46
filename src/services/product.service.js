@@ -36,11 +36,13 @@ async function createProduct(input = {}) {
     name: String(input.name || '').trim(),
     barcode: String(input.barcode || '').trim(),
     brand: String(input.brand || '').trim(),
+    category: String(input.category || '').trim(),
     baseUnit: String(input.baseUnit || '').trim(),
     salePrice: Number(input.salePrice || 0),
     costPrice: Number(input.costPrice || 0),
     conversionRate: Number(input.conversionRate || 1),
-    defaultWarehouseCode: String(input.defaultWarehouseCode || '').trim(),
+    defaultWarehouse: String(input.defaultWarehouse || input.defaultWarehouseCode || '').trim(),
+    defaultWarehouseCode: String(input.defaultWarehouseCode || input.defaultWarehouse || '').trim(),
     isActive: input.isActive !== false,
   };
   if (!payload.code) throw Object.assign(new Error('Thiếu mã sản phẩm'), { status: 400 });
