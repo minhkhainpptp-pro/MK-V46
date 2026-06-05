@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const inventoryService = require('../services/inventory.service');
+const { requireRole } = require('../middlewares/permission.middleware');
 const inventoryPosting = require('../services/posting/inventoryPosting');
 
 function sendOk(res, payload = {}, message = 'OK') {
@@ -95,7 +96,7 @@ router.get('/ledger', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/adjustment', async (req, res, next) => {
+router.post('/adjustment', requireRole('admin', 'warehouse', 'accounting'), async (req, res, next) => {
   try {
     const result = await inventoryPosting.postAdjustment({
       ...req.body,

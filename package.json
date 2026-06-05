@@ -7,7 +7,10 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "static-check": "node scripts/static-check.js",
-    "full-flow-check": "node tests/full-flow.test.js"
+    "full-flow-check": "node tests/full-flow.test.js",
+    "db:indexes": "node scripts/db-indexes.js",
+    "inventory:rebuild": "node scripts/inventory-rebuild.js",
+    "production-check": "node tests/production-hardening.test.js"
   },
   "keywords": [],
   "author": "",

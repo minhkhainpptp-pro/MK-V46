@@ -21,6 +21,13 @@ async function receipt(req, res, next) {
   } catch (err) { next(err); }
 }
 
+async function customerStatement(req, res, next) {
+  try {
+    const result = await service.getCustomerStatement(req.query);
+    res.json({ ok: true, rows: result.rows, data: result.rows, summary: result.summary });
+  } catch (err) { next(err); }
+}
+
 async function discount(req, res, next) {
   try {
     const row = await service.postDiscountAr(req.body || {});
@@ -28,4 +35,4 @@ async function discount(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { list, byCustomer, receipt, discount };
+module.exports = { list, byCustomer, customerStatement, receipt, discount };

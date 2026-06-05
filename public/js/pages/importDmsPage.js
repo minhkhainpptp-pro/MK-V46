@@ -96,7 +96,7 @@
   function renderPreview(rows) {
     return rows.map(function (r, index) {
       var cls = r.status === 'ok' ? 'ok' : (r.status === 'warning' ? 'warn' : 'error');
-      return '<tr><td>' + (index + 1) + '</td><td><span class="' + cls + '">' + F.esc(r.status || '') + '</span></td><td>' + F.esc(r.orderCode || r.code || '') + '</td><td>' + F.esc(r.customerCode || '') + '</td><td>' + F.esc(r.customerName || '') + '</td><td>' + F.money(r.totalAmount || 0) + '</td><td>' + F.esc((r.messages || []).join('; ')) + '</td></tr>';
+      return '<tr><td>' + (index + 1) + '</td><td><span class="' + cls + '">' + F.esc(r.statusLabel || r.status || '') + '</span></td><td>' + F.esc(r.orderCode || r.code || '') + '</td><td>' + F.esc(r.customerCode || '') + '</td><td>' + F.esc(r.customerName || '') + '</td><td>' + F.money(r.totalAmount || 0) + '</td><td>' + F.esc((r.messages || []).join('; ')) + '</td></tr>';
     }).join('') || '<tr><td colspan="7" class="muted">Chưa có preview.</td></tr>';
   }
 

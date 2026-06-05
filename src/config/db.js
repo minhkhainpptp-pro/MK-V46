@@ -6,7 +6,9 @@ async function connectMongo() {
     if (!mongoUri) {
       throw new Error('MONGO_URI is required');
     }
-    await mongoose.connect(mongoUri);
+    await mongoose.connect(mongoUri, {
+      autoIndex: process.env.NODE_ENV !== 'production' && process.env.MONGO_AUTOINDEX !== '0',
+    });
     console.log('MongoDB Connected');
   } catch (error) {
     console.error('MongoDB Error', error);

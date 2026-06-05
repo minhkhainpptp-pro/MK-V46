@@ -96,7 +96,7 @@ async function findSalesOrderOrThrow(id) {
   return order;
 }
 
-async function createSalesOrder(input = {}) {
+async function createSalesOrder(input = {}, options = {}) {
   validateSalesOrderPayload(input);
   const code = cleanText(input.code || buildOrderCode());
   const normalizedCode = normalizeOrderCode(code);
@@ -109,7 +109,7 @@ async function createSalesOrder(input = {}) {
   const salesStaffCode = cleanText(input.salesStaffCode || customer.salesStaffCode);
   const deliveryStaffCode = cleanText(input.deliveryStaffCode || customer.deliveryStaffCode);
 
-  const doc = await SalesOrder.create({
+  const payload = {
     id: cleanText(input.id) || code,
     code,
     normalizedCode,
@@ -136,7 +136,9 @@ async function createSalesOrder(input = {}) {
     masterOrderId: '',
     masterOrderCode: '',
     note: cleanText(input.note),
-  });
+  };
+  const created = await SalesOrder.create([payload], options.session ? { session: options.session } : undefined);
+  const doc = created[0];
   return doc.toObject();
 }
 
@@ -240,21 +242,44 @@ async function cancelSalesOrder(id, reason = '') {
 }
 
 function normalizeImportRows(rows = []) {
-  return (Array.isArray(rows) ? rows : []).map((row) => ({
-    orderCode: cleanText(row.orderCode || row.code || row.salesOrderCode),
-    customerCode: cleanText(row.customerCode),
-    customerName: cleanText(row.customerName),
-    deliveryDate: cleanText(row.deliveryDate),
-    salesStaffCode: cleanText(row.salesStaffCode),
-    deliveryStaffCode: cleanText(row.deliveryStaffCode),
-    productCode: cleanText(row.productCode),
-    productName: cleanText(row.productName),
-    quantity: Number(row.quantity ?? row.qty ?? 0),
-    price: Number(row.price ?? row.salePrice ?? 0),
-    unit: cleanText(row.unit),
-    warehouseCode: cleanText(row.warehouseCode),
-    source: cleanText(row.source || 'DMS').toUpperCase(),
-  })).filter((row) => row.orderCode || row.customerCode || row.productCode);
+  const normalized = [];
+  for (const sourceRow of (Array.isArray(rows) ? rows : [])) {
+    const row = sourceRow || {};
+    const orderCode = cleanText(row.orderCode || row.code || row.salesOrderCode || row.soHoaDon || row['Mã đơn']);
+    const base = {
+      orderCode,
+      customerCode: cleanText(row.customerCode || row['Mã KH'] || row.maKH),
+      customerName: cleanText(row.customerName || row['Khách'] || row.tenKH),
+      deliveryDate: cleanText(row.deliveryDate || row['Ngày giao']),
+      salesStaffCode: cleanText(row.salesStaffCode || row['NVBH']),
+      deliveryStaffCode: cleanText(row.deliveryStaffCode || row['NVGH']),
+      source: cleanText(row.source || 'DMS').toUpperCase(),
+    };
+
+    const rawItems = Array.isArray(row.items) && row.items.length
+      ? row.items
+      : [{
+          productCode: row.productCode || row['Mã SP'] || row.maSP,
+          productName: row.productName || row['Tên SP'] || row.tenSP,
+          quantity: row.quantity ?? row.qty ?? row['Số lượng'],
+          price: row.price ?? row.salePrice ?? row['Đơn giá'],
+          unit: row.unit,
+          warehouseCode: row.warehouseCode || row['Kho'],
+        }];
+
+    for (const item of rawItems) {
+      normalized.push({
+        ...base,
+        productCode: cleanText(item.productCode || item.code || item['Mã SP']),
+        productName: cleanText(item.productName || item.name || item['Tên SP']),
+        quantity: Number(item.quantity ?? item.qty ?? item['Số lượng'] ?? 0),
+        price: Number(item.price ?? item.salePrice ?? item['Đơn giá'] ?? 0),
+        unit: cleanText(item.unit),
+        warehouseCode: cleanText(item.warehouseCode || item['Kho']),
+      });
+    }
+  }
+  return normalized.filter((row) => row.orderCode || row.customerCode || row.productCode);
 }
 
 async function importPreview(input = {}) {
@@ -263,7 +288,7 @@ async function importPreview(input = {}) {
   for (const row of rows) {
     const key = row.orderCode;
     if (!key) continue;
-    if (!grouped.has(key)) grouped.set(key, { orderCode: key, customerCode: row.customerCode, customerName: row.customerName, deliveryDate: row.deliveryDate, source: row.source, items: [] });
+    if (!grouped.has(key)) grouped.set(key, { orderCode: key, customerCode: row.customerCode, customerName: row.customerName, deliveryDate: row.deliveryDate, salesStaffCode: row.salesStaffCode, deliveryStaffCode: row.deliveryStaffCode, source: row.source, items: [] });
     grouped.get(key).items.push(row);
   }
 
@@ -288,7 +313,11 @@ async function importPreview(input = {}) {
       if (item.quantity <= 0) messages.push(`Dòng ${idx + 1}: số lượng phải lớn hơn 0`);
     }
     const totalAmount = amountOf(group.items.reduce((sum, item) => sum + item.quantity * item.price, 0));
-    return { ...group, totalAmount, status: messages.length ? 'error' : 'ok', messages };
+    const hasDuplicate = messages.some((msg) => msg.includes('Trùng đơn'));
+    const hasMissingProduct = messages.some((msg) => msg.includes('không tìm thấy sản phẩm'));
+    const status = messages.length ? (hasDuplicate || hasMissingProduct ? 'error' : 'warning') : 'ok';
+    const statusLabel = status === 'ok' ? '✓ nhập được' : (status === 'warning' ? '⚠ cần kiểm tra' : (hasDuplicate ? '✕ đơn trùng' : '✕ lỗi dữ liệu'));
+    return { ...group, totalAmount, status, statusLabel, messages };
   });
   return { rows: previewRows, total: previewRows.length };
 }
@@ -296,19 +325,28 @@ async function importPreview(input = {}) {
 async function importConfirm(input = {}) {
   const preview = input.previewRows ? { rows: input.previewRows } : await importPreview(input);
   const valid = preview.rows.filter((row) => row.status === 'ok');
+  const session = await mongoose.startSession();
   const docs = [];
-  for (const row of valid) {
-    const order = await createSalesOrder({
-      code: row.orderCode,
-      customerCode: row.customerCode,
-      customerName: row.customerName,
-      deliveryDate: row.deliveryDate,
-      source: row.source || 'DMS',
-      items: row.items,
+  try {
+    await session.withTransaction(async () => {
+      for (const row of valid) {
+        const order = await createSalesOrder({
+          code: row.orderCode,
+          customerCode: row.customerCode,
+          customerName: row.customerName,
+          deliveryDate: row.deliveryDate,
+          salesStaffCode: row.salesStaffCode,
+          deliveryStaffCode: row.deliveryStaffCode,
+          source: row.source || 'DMS',
+          items: row.items,
+        }, { session });
+        docs.push(order);
+      }
     });
-    docs.push(order);
+  } finally {
+    await session.endSession();
   }
-  return { inserted: docs.length, rows: docs };
+  return { inserted: docs.length, rows: docs, transaction: 'committed' };
 }
 
 module.exports = {

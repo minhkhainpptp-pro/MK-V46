@@ -80,9 +80,23 @@ async function postSaleAr(salesOrder, createdBy = '') {
   });
 }
 
+
+async function assertNotOverCustomerDebt(payload = {}, amount = 0) {
+  const customerCode = cleanText(payload.customerCode);
+  if (!customerCode) return;
+  const currentDebt = await getCustomerDebt(customerCode, {});
+  if (amountOf(amount) > amountOf(currentDebt + DEBT_ZERO_TOLERANCE)) {
+    throw Object.assign(
+      new Error(`Thu vượt công nợ: số thu ${amountOf(amount)} lớn hơn công nợ ${amountOf(currentDebt)}`),
+      { status: 409 }
+    );
+  }
+}
+
 async function postReceiptAr(payload) {
   const amount = amountOf(payload.amount || payload.cashAmount || 0);
   if (amount <= 0) throw Object.assign(new Error('Số tiền thu phải lớn hơn 0'), { status: 400 });
+  await assertNotOverCustomerDebt(payload, amount);
   const sourceId = cleanText(payload.receiptId || payload.sourceId || makeId('RECEIPT'));
   return createOnce({
     type: 'AR_RECEIPT',
@@ -275,6 +289,52 @@ async function getDebtCustomers(query = {}) {
   return { rows: normalizedRows, total: normalizedRows.length, summary };
 }
 
+
+async function getCustomerStatement(query = {}) {
+  const customerCode = cleanText(query.customerCode);
+  if (!customerCode) throw Object.assign(new Error('Thiếu customerCode'), { status: 400 });
+
+  const fromDate = cleanText(query.dateFrom || query.from);
+  const toDate = cleanText(query.dateTo || query.to);
+  const openingMatch = { customerCode };
+  if (fromDate) openingMatch.date = { $lt: fromDate };
+
+  const periodMatch = { customerCode };
+  if (fromDate || toDate) {
+    periodMatch.date = {};
+    if (fromDate) periodMatch.date.$gte = fromDate;
+    if (toDate) periodMatch.date.$lte = toDate;
+  }
+
+  const [openingRows, rows] = await Promise.all([
+    fromDate ? ArLedger.find(openingMatch).select('debit credit').lean() : [],
+    ArLedger.find(periodMatch).sort({ date: 1, createdAt: 1 }).lean(),
+  ]);
+
+  const openingBalance = openingRows.reduce((sum, row) => amountOf(sum + amountOf(row.debit) - amountOf(row.credit)), 0);
+  let runningDebt = amountOf(openingBalance);
+  const statementRows = rows.map((row) => {
+    runningDebt = amountOf(runningDebt + amountOf(row.debit) - amountOf(row.credit));
+    return { ...row, openingBalance, runningDebt };
+  });
+
+  const periodDebit = rows.reduce((sum, row) => amountOf(sum + amountOf(row.debit)), 0);
+  const periodCredit = rows.reduce((sum, row) => amountOf(sum + amountOf(row.credit)), 0);
+  const closingBalance = amountOf(openingBalance + periodDebit - periodCredit);
+
+  return {
+    customerCode,
+    rows: statementRows,
+    summary: {
+      openingBalance: amountOf(openingBalance),
+      periodDebit: amountOf(periodDebit),
+      periodCredit: amountOf(periodCredit),
+      closingBalance,
+    },
+  };
+}
+
+
 module.exports = {
   DEBT_ZERO_TOLERANCE,
   postSaleAr,
@@ -284,6 +344,7 @@ module.exports = {
   reverseSaleAr,
   getCustomerDebt,
   getCustomerDebtDetail,
+  getCustomerStatement,
   getDebtCustomers,
   listArLedgers,
 };

@@ -212,6 +212,7 @@ async function auditInventorySnapshots() {
 
 module.exports = {
   addInventoryEntry,
+  post: addInventoryEntry,
   getProductStock,
   getManyStocks,
   getWarehouseStock,
