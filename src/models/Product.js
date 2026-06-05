@@ -7,4 +7,4 @@ const schema=createBaseSchema({
  defaultWarehouse:String, isActive:{type:Boolean,default:true}
 });
 schema.index({code:1},{unique:true});
-module.exports=mongoose.models.Product||mongoose.model('Product',schema);
+module.exports = mongoose.models.Product || mongoose.model('Product', schema, 'products');

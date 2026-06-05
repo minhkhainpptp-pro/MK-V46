@@ -11,26 +11,62 @@ const Warehouse = require('../models/Warehouse');
 const Inventory = require('../models/Inventory');
 const InventorySnapshot = require('../models/InventorySnapshot');
 
-async function ensureMongoIndexes() {
-  // Backfill legacy customer fields before creating canonical indexes.
-  // Old versions used code/name; V46 catalog uses customerCode/customerName.
+async function dropIndexIfExists(collection, indexName) {
+  const indexes = await collection.indexes();
+  if (indexes.some((idx) => idx.name === indexName)) {
+    await collection.dropIndex(indexName);
+  }
+}
+
+async function repairCustomerCatalog() {
+  // Remove polluted test rows created by earlier wrong routing/model mapping.
+  // These rows look like product test records inside `customers` and break the
+  // canonical customerCode unique index with customerCode=null.
+  await Customer.deleteMany({
+    customerCode: { $exists: false },
+    customerName: { $exists: false },
+    code: /^P\d+/i,
+  });
+
+  // Remove truly empty legacy rows; they cannot be recovered into valid customers.
+  await Customer.deleteMany({
+    $or: [{ customerCode: null }, { customerCode: { $exists: false } }, { customerCode: '' }],
+    $and: [
+      { $or: [{ code: { $exists: false } }, { code: '' }, { code: null }] },
+      { $or: [{ name: { $exists: false } }, { name: '' }, { name: null }] },
+      { $or: [{ customerName: { $exists: false } }, { customerName: '' }, { customerName: null }] },
+    ],
+  });
+
+  // Backfill recoverable legacy customer rows from code/name into canonical fields.
   await Customer.updateMany(
     {
       $or: [
         { customerCode: { $exists: false } },
+        { customerCode: null },
         { customerCode: '' },
         { customerName: { $exists: false } },
+        { customerName: null },
         { customerName: '' },
       ],
+      code: { $exists: true, $ne: '' },
     },
     [
       {
         $set: {
           customerCode: {
-            $ifNull: ['$customerCode', '$code'],
+            $cond: [
+              { $or: [{ $eq: ['$customerCode', null] }, { $eq: ['$customerCode', ''] }] },
+              '$code',
+              '$customerCode',
+            ],
           },
           customerName: {
-            $ifNull: ['$customerName', '$name'],
+            $cond: [
+              { $or: [{ $eq: ['$customerName', null] }, { $eq: ['$customerName', ''] }] },
+              { $ifNull: ['$name', '$code'] },
+              '$customerName',
+            ],
           },
           code: {
             $ifNull: ['$code', '$customerCode'],
@@ -45,6 +81,13 @@ async function ensureMongoIndexes() {
       },
     ]
   );
+}
+
+async function ensureMongoIndexes() {
+  // Drop legacy non-partial unique index that treats missing customerCode as null.
+  // It caused: E11000 duplicate key customers index: customerCode_1 dup key { customerCode: null }.
+  await dropIndexIfExists(Customer.collection, 'customerCode_1');
+  await repairCustomerCatalog();
 
   await Promise.all([
     SalesOrder.collection.createIndex({ code: 1 }, { name: 'idx_so_code_unique', unique: true }),

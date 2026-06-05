@@ -50,4 +50,4 @@ schema.index({ deliveryStaffCode: 1 }, { name: 'idx_customer_delivery_staff_code
 schema.index({ routeCode: 1 }, { name: 'idx_customer_route_code' });
 schema.index({ customerName: 'text', customerCode: 'text', phone: 'text' }, { name: 'idx_customer_search_text' });
 
-module.exports = mongoose.models.Customer || mongoose.model('Customer', schema);
+module.exports = mongoose.models.Customer || mongoose.model('Customer', schema, 'customers');
