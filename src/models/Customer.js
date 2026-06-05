@@ -1,14 +1,10 @@
-const mongoose = require('mongoose');
-
-const CustomerSchema = new mongoose.Schema({
-  code: { type: String, required: true, trim: true, unique: true, index: true },
-  name: { type: String, required: true, trim: true, index: true },
-  phone: { type: String, trim: true, default: '' },
-  address: { type: String, trim: true, default: '' },
-  routeCode: { type: String, trim: true, default: '', index: true },
-  salesStaffCode: { type: String, trim: true, default: '', index: true },
-  deliveryStaffCode: { type: String, trim: true, default: '', index: true },
-  isActive: { type: Boolean, default: true, index: true },
-}, { timestamps: true, versionKey: false });
-
-module.exports = mongoose.model('Customer', CustomerSchema);
+const mongoose=require('mongoose');
+const {createBaseSchema}=require('../core/baseSchema');
+const schema=createBaseSchema({
+ customerCode:String, customerName:String, address:String,
+ routeCode:String, routeName:String,
+ salesStaffCode:String, salesStaffName:String,
+ deliveryStaffCode:String, deliveryStaffName:String
+});
+schema.index({customerCode:1},{unique:true});
+module.exports=mongoose.models.Customer||mongoose.model('Customer',schema);

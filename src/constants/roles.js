@@ -1,0 +1,1 @@
+module.exports=['admin','accountant','sales','delivery'];

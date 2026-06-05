@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 
-const { connectDB } = require('./config/db');
+const bootstrap = require('./core/bootstrap');
 const { ensureMongoIndexes } = require('./core/ensureMongoIndexes');
 const { seedDefaults } = require('./core/seedDefaults');
 
@@ -48,9 +48,15 @@ app.use('/api/customers', require('./routes/customer.routes'));
 app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/sales-orders', require('./routes/salesOrder.routes'));
 app.use('/api/master-orders', require('./routes/masterOrder.routes'));
-app.use('/api/mobile/delivery', require('./routes/mobileDelivery.routes'));
+app.use('/api/return-orders', require('./routes/returnOrder.routes'));
+app.use('/api/ar-ledgers', require('./routes/arLedger.routes'));
+app.use('/api/mobile/delivery', require('./routes/mobile/delivery.routes'));
+app.use('/api/mobile/collection', require('./routes/mobile/collection.routes'));
+app.use('/api/mobile/report', require('./routes/mobile/report.routes'));
 app.use('/api/accounting', require('./routes/accounting.routes'));
 app.use('/api/debts', require('./routes/debt.routes'));
+app.use('/api/inventory', require('./routes/inventory.routes'));
+app.use('/api/reports', require('./routes/report.routes'));
 
 app.use((req, res) => {
   res.status(404).json({
@@ -69,9 +75,7 @@ app.use((err, req, res, next) => {
 });
 
 async function main() {
-  await connectDB();
-  await ensureMongoIndexes();
-  await seedDefaults();
+  await bootstrap();
 
   const port = Number(process.env.PORT || 10000);
   app.listen(port, () => {

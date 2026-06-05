@@ -1,0 +1,1 @@
+module.exports={normalize:(s='')=>String(s).trim()};

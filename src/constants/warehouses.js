@@ -1,0 +1,1 @@
+module.exports={HC:'KHO_HC',PC:'KHO_PC'};

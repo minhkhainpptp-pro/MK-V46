@@ -1,10 +1,8 @@
-const mongoose = require('mongoose');
-
-const WarehouseSchema = new mongoose.Schema({
-  code: { type: String, required: true, trim: true, unique: true, index: true },
-  name: { type: String, required: true, trim: true },
-  type: { type: String, trim: true, default: '' },
-  isActive: { type: Boolean, default: true, index: true },
-}, { timestamps: true, versionKey: false });
-
-module.exports = mongoose.model('Warehouse', WarehouseSchema);
+const mongoose=require('mongoose');
+const {createBaseSchema}=require('../core/baseSchema');
+const schema=createBaseSchema({
+ warehouseCode:String,warehouseName:String,
+ isActive:{type:Boolean,default:true}
+});
+schema.index({warehouseCode:1},{unique:true});
+module.exports=mongoose.models.Warehouse||mongoose.model('Warehouse',schema);

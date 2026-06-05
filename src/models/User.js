@@ -1,13 +1,10 @@
-const mongoose = require('mongoose');
-
-const UserSchema = new mongoose.Schema({
-  code: { type: String, required: true, trim: true, unique: true, index: true },
-  name: { type: String, required: true, trim: true, index: true },
-  phone: { type: String, trim: true, default: '' },
-  username: { type: String, required: true, trim: true, unique: true, index: true },
-  password: { type: String, required: true, select: false },
-  roleCode: { type: String, required: true, trim: true, index: true },
-  isActive: { type: Boolean, default: true, index: true },
-}, { timestamps: true, versionKey: false });
-
-module.exports = mongoose.model('User', UserSchema);
+const mongoose=require('mongoose');
+const {createBaseSchema}=require('../core/baseSchema');
+const schema=createBaseSchema({
+ userCode:String,userName:String,username:String,password:String,
+ roleCode:String,roleName:String,phone:String,email:String,
+ isActive:{type:Boolean,default:true}
+});
+schema.index({userCode:1},{unique:true});
+schema.index({username:1},{unique:true});
+module.exports=mongoose.models.User||mongoose.model('User',schema);

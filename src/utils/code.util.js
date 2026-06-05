@@ -1,0 +1,1 @@
+module.exports={generateSalesOrderCode:()=>`SO${Date.now()}`,generateMasterOrderCode:()=>`MO${Date.now()}`,generateReturnOrderCode:()=>`RO${Date.now()}`,generateArCode:()=>`AR${Date.now()}`};

@@ -1,5 +1,13 @@
 const router = require('express').Router();
-const service = require('../services/masterOrderService');
-router.post('/', async (req, res, next) => { try { res.json({ ok: true, masterOrder: await service.createMasterOrder(req.body) }); } catch (e) { next(e); } });
-router.get('/:id', async (req, res, next) => { try { res.json({ ok: true, data: await service.getMasterWithChildren(req.params.id) }); } catch (e) { next(e); } });
+const controller = require('../controllers/masterOrder.controller');
+
+router.get('/', controller.list);
+router.get('/:id', controller.getById);
+router.post('/create', controller.create);
+router.post('/', controller.create);
+router.put('/:id', controller.update);
+router.delete('/:id', controller.remove);
+router.post('/:id/deliver', controller.deliver);
+router.post('/:id/accounting-confirm', controller.accountingConfirm);
+
 module.exports = router;

@@ -1,0 +1,1 @@
+module.exports={ACTIVE:'active',PENDING:'pending',ASSIGNED:'assigned',DELIVERED:'delivered',CONFIRMED:'confirmed',CANCELLED:'cancelled'};

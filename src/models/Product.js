@@ -1,16 +1,10 @@
-const mongoose = require('mongoose');
-
-const ProductSchema = new mongoose.Schema({
-  code: { type: String, required: true, trim: true, unique: true, index: true },
-  name: { type: String, required: true, trim: true, index: true },
-  barcode: { type: String, trim: true, default: '', index: true },
-  brand: { type: String, trim: true, default: '' },
-  baseUnit: { type: String, trim: true, default: '' },
-  salePrice: { type: Number, default: 0 },
-  costPrice: { type: Number, default: 0 },
-  conversionRate: { type: Number, default: 1 },
-  defaultWarehouseCode: { type: String, trim: true, default: '' },
-  isActive: { type: Boolean, default: true, index: true },
-}, { timestamps: true, versionKey: false });
-
-module.exports = mongoose.model('Product', ProductSchema);
+const mongoose=require('mongoose');
+const {createBaseSchema}=require('../core/baseSchema');
+const schema=createBaseSchema({
+ name:String, barcode:String, brand:String, category:String,
+ baseUnit:String, conversionRate:Number,
+ salePrice:Number, costPrice:Number,
+ defaultWarehouse:String, isActive:{type:Boolean,default:true}
+});
+schema.index({code:1},{unique:true});
+module.exports=mongoose.models.Product||mongoose.model('Product',schema);
