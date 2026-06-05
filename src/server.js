@@ -50,6 +50,7 @@ app.use('/api/sales-orders', require('./routes/salesOrder.routes'));
 app.use('/api/master-orders', require('./routes/masterOrder.routes'));
 app.use('/api/return-orders', require('./routes/returnOrder.routes'));
 app.use('/api/ar-ledgers', require('./routes/arLedger.routes'));
+app.use('/api/journals', require('./routes/journal.routes'));
 app.use('/api/mobile/delivery', require('./routes/mobile/delivery.routes'));
 app.use('/api/mobile/collection', require('./routes/mobile/collection.routes'));
 app.use('/api/mobile/report', require('./routes/mobile/report.routes'));

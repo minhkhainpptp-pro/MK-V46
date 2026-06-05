@@ -3,6 +3,7 @@ const ReturnOrder = require('../models/ReturnOrder');
 const ArLedger = require('../models/ArLedger');
 const FundLedger = require('../models/FundLedger');
 const Inventory = require('../models/Inventory');
+const Journal = require('../models/Journal');
 const { roundMoney } = require('../utils/money.util');
 
 function cleanText(value) { return String(value || '').trim(); }
@@ -26,13 +27,15 @@ async function getDashboard(query = {}) {
   const returnFilter = df ? { deliveryDate: df, status: { $nin: ['cancelled'] } } : { status: { $nin: ['cancelled'] } };
   const arFilter = df ? { date: df } : {};
   const fundFilter = df ? { date: df } : {};
+  const journalFilter = df ? { date: df } : {};
 
-  const [salesRows, returnRows, arRows, fundRows, inventoryCount] = await Promise.all([
+  const [salesRows, returnRows, arRows, fundRows, inventoryCount, journalCount] = await Promise.all([
     SalesOrder.find(salesFilter).select('payableAmount finalAmount totalAmount status accountingStatus').limit(5000).lean(),
     ReturnOrder.find(returnFilter).select('totalReturnAmount amount status').limit(5000).lean(),
     ArLedger.find(arFilter).select('debit credit type').limit(10000).lean(),
     FundLedger.find(fundFilter).select('amount type').limit(10000).lean(),
     Inventory.countDocuments({}),
+    Journal.countDocuments(journalFilter),
   ]);
 
   const salesAmount = amountOf(salesRows.reduce((sum, row) => sum + Number(row.payableAmount ?? row.finalAmount ?? row.totalAmount ?? 0), 0));
@@ -51,8 +54,9 @@ async function getDashboard(query = {}) {
       debtAmount: amountOf(arDebit - arCredit),
       fundAmount,
       inventoryLedgerCount: inventoryCount,
+      journalCount,
     },
-    source: ['salesOrders', 'returnOrders', 'arLedgers', 'fundLedgers', 'inventories'],
+    source: ['salesOrders', 'returnOrders', 'arLedgers', 'fundLedgers', 'inventories', 'journals'],
     perf: { totalMs: Date.now() - startedAt },
   };
 }

@@ -6,6 +6,7 @@ const modules = [
   '../src/models/ReturnOrder',
   '../src/models/ArLedger',
   '../src/models/FundLedger',
+  '../src/models/Journal',
   '../src/services/salesOrderService',
   '../src/services/masterOrderService',
   '../src/services/mobile/delivery.service',
@@ -15,6 +16,7 @@ const modules = [
   '../src/routes/masterOrder.routes',
   '../src/routes/accounting.routes',
   '../src/routes/report.routes',
+  '../src/routes/journal.routes',
 ];
 
 for (const modulePath of modules) {

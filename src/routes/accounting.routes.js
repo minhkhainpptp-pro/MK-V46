@@ -21,4 +21,14 @@ router.post('/confirm-master-order', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+
+router.post('/confirm-delivery', async (req, res, next) => {
+  try {
+    res.json(await service.confirmDeliveryAccounting(
+      req.body.salesOrderId || req.body.salesOrderCode || req.body.id,
+      req.body.confirmedBy || req.body.userCode || ''
+    ));
+  } catch (e) { next(e); }
+});
+
 module.exports = router;

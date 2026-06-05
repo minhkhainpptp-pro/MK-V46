@@ -11,4 +11,5 @@ module.exports = {
   FundLedger: require('./FundLedger'),
   Inventory: require('./Inventory'),
   InventorySnapshot: require('./InventorySnapshot'),
+  Journal: require('./Journal'),
 };

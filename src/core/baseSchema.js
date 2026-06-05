@@ -15,9 +15,8 @@ function createBaseSchema(fields = {}) {
     { timestamps: true }
   );
 
-  schema.index({ id: 1 });
-  schema.index({ code: 1 });
-  schema.index({ status: 1 });
+  // Common id/code/status are indexed at field level. Avoid declaring
+  // duplicated schema.index() entries because Mongoose 8 warns and Render logs become noisy.
 
   // Mongoose 8 supports promise/sync middleware. Do not call next() here;
   // Render was failing on POST with: "next is not a function".

@@ -10,6 +10,7 @@ const Role = require('../models/Role');
 const Warehouse = require('../models/Warehouse');
 const Inventory = require('../models/Inventory');
 const InventorySnapshot = require('../models/InventorySnapshot');
+const Journal = require('../models/Journal');
 
 async function dropIndexIfExists(collection, indexName) {
   const indexes = await collection.indexes();
@@ -129,6 +130,10 @@ async function ensureMongoIndexes() {
     ),
     safeCreateIndex(FundLedger.collection, { date: 1, type: 1 }, { name: 'idx_fund_date_type' }),
     safeCreateIndex(FundLedger.collection, { masterOrderId: 1 }, { name: 'idx_fund_master' }),
+    safeCreateIndex(FundLedger.collection,
+      { sourceType: 1, sourceId: 1, type: 1 },
+      { name: 'idx_fund_source_type_id_type_unique', unique: true, partialFilterExpression: { sourceType: { $type: 'string' }, sourceId: { $type: 'string' }, type: { $type: 'string' } } }
+    ),
     safeCreateIndex(Product.collection, { code: 1 }, { name: 'idx_product_code_unique', unique: true }),
     safeCreateIndex(Product.collection, { name: 1 }, { name: 'idx_product_name' }),
     safeCreateIndex(Product.collection, { barcode: 1 }, { name: 'idx_product_barcode' }),
@@ -157,6 +162,13 @@ async function ensureMongoIndexes() {
     safeCreateIndex(InventorySnapshot.collection, { productId: 1, warehouseId: 1 }, { name: 'idx_inventory_snapshot_product_warehouse_unique', unique: true }),
     safeCreateIndex(InventorySnapshot.collection, { productCode: 1, warehouseCode: 1 }, { name: 'idx_inventory_snapshot_product_code_warehouse_code' }),
     safeCreateIndex(InventorySnapshot.collection, { updatedAt: -1 }, { name: 'idx_inventory_snapshot_updated_at' }),
+    safeCreateIndex(Journal.collection, { date: 1, type: 1 }, { name: 'idx_journal_date_type' }),
+    safeCreateIndex(Journal.collection, { salesOrderId: 1 }, { name: 'idx_journal_sales_order_id' }),
+    safeCreateIndex(Journal.collection, { masterOrderId: 1 }, { name: 'idx_journal_master_order_id' }),
+    safeCreateIndex(Journal.collection,
+      { sourceType: 1, sourceId: 1, type: 1 },
+      { name: 'idx_journal_source_type_id_type_unique', unique: true, partialFilterExpression: { sourceType: { $type: 'string' }, sourceId: { $type: 'string' }, type: { $type: 'string' } } }
+    ),
   ]);
   console.log('[DB] Indexes ensured');
 }

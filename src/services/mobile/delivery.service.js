@@ -3,6 +3,7 @@ const MasterOrder = require('../../models/MasterOrder');
 const SalesOrder = require('../../models/SalesOrder');
 const ReturnOrder = require('../../models/ReturnOrder');
 const FundLedger = require('../../models/FundLedger');
+const Journal = require('../../models/Journal');
 const returnOrderService = require('../returnOrder.service');
 const { roundMoney } = require('../../utils/money.util');
 
@@ -12,6 +13,82 @@ function httpError(message, status = 400) {
 
 function cleanText(value) {
   return String(value || '').trim();
+}
+
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function amountOf(value) {
+  return roundMoney(Number(value || 0));
+}
+
+function makeCode(prefix, sourceCode) {
+  return `${prefix}-${cleanText(sourceCode) || Date.now()}`;
+}
+
+async function createFundOnce(payload) {
+  const sourceType = cleanText(payload.sourceType);
+  const sourceId = cleanText(payload.sourceId);
+  const type = cleanText(payload.type);
+  if (sourceType && sourceId && type) {
+    const existed = await FundLedger.findOne({ sourceType, sourceId, type }).lean();
+    if (existed) return existed;
+  }
+  const amount = amountOf(payload.amount);
+  if (amount <= 0) return null;
+  const doc = await FundLedger.create({
+    id: cleanText(payload.id) || makeCode('FL', `${type}-${sourceId}`),
+    code: cleanText(payload.code) || makeCode(type, payload.sourceCode || sourceId),
+    type,
+    method: cleanText(payload.method) || (type === 'BANK_RECEIPT' ? 'bank' : 'cash'),
+    amount,
+    date: cleanText(payload.date) || today(),
+    customerCode: cleanText(payload.customerCode),
+    customerName: cleanText(payload.customerName),
+    salesOrderId: cleanText(payload.salesOrderId),
+    salesOrderCode: cleanText(payload.salesOrderCode),
+    masterOrderId: cleanText(payload.masterOrderId),
+    masterOrderCode: cleanText(payload.masterOrderCode),
+    note: cleanText(payload.note),
+    sourceType,
+    sourceId,
+    createdBy: cleanText(payload.createdBy),
+  });
+  return doc.toObject();
+}
+
+async function createJournalOnce(payload) {
+  const sourceType = cleanText(payload.sourceType);
+  const sourceId = cleanText(payload.sourceId);
+  const type = cleanText(payload.type);
+  if (sourceType && sourceId && type) {
+    const existed = await Journal.findOne({ sourceType, sourceId, type }).lean();
+    if (existed) return existed;
+  }
+  const amount = amountOf(payload.amount);
+  if (amount <= 0) return null;
+  const doc = await Journal.create({
+    id: cleanText(payload.id) || makeCode('JNL', `${type}-${sourceId}`),
+    code: cleanText(payload.code) || makeCode(`JNL-${type}`, payload.sourceCode || sourceId),
+    type,
+    date: cleanText(payload.date) || today(),
+    customerCode: cleanText(payload.customerCode),
+    customerName: cleanText(payload.customerName),
+    salesOrderId: cleanText(payload.salesOrderId),
+    salesOrderCode: cleanText(payload.salesOrderCode),
+    masterOrderId: cleanText(payload.masterOrderId),
+    masterOrderCode: cleanText(payload.masterOrderCode),
+    amount,
+    lines: Array.isArray(payload.lines) ? payload.lines : [],
+    sourceType,
+    sourceId,
+    sourceCode: cleanText(payload.sourceCode),
+    note: cleanText(payload.note),
+    createdBy: cleanText(payload.createdBy),
+  });
+  return doc.toObject();
 }
 
 function objectIdOrNull(value) {
@@ -267,23 +344,86 @@ async function confirmDelivery(input = {}) {
     });
   }
 
+  const orderId = cleanText(order.id || order._id);
+  const orderCode = cleanText(order.code);
+  const cashAmount = amountOf(input.cashAmount || 0);
+  const bankAmount = amountOf(input.bankAmount || 0);
+  const bonusAmount = amountOf(input.bonusAmount || 0);
+  const confirmDate = cleanText(input.deliveryDate || order.deliveryDate) || today();
+  const createdBy = cleanText(input.createdBy || input.deliveryStaffCode || order.deliveryStaffCode);
+  const isFailed = input.deliveryStatus === 'failed';
+
   await SalesOrder.updateOne({ _id: order._id }, {
     $set: {
-      status: input.deliveryStatus === 'failed' ? 'assigned' : 'delivered',
-      deliveryStatus: input.deliveryStatus === 'failed' ? 'failed' : 'delivered',
-      deliveredAt: new Date(),
-      cashAmount: Number(input.cashAmount || 0),
-      bankAmount: Number(input.bankAmount || 0),
-      bonusAmount: Number(input.bonusAmount || 0),
+      status: isFailed ? 'assigned' : 'delivered',
+      deliveryStatus: isFailed ? 'failed' : 'delivered',
+      deliveredAt: isFailed ? undefined : new Date(),
+      cashAmount,
+      bankAmount,
+      bonusAmount,
       paymentDraft: {
-        cashAmount: Number(input.cashAmount || 0),
-        bankAmount: Number(input.bankAmount || 0),
-        bonusAmount: Number(input.bonusAmount || 0),
+        cashAmount,
+        bankAmount,
+        bonusAmount,
         note: cleanText(input.note),
         savedAt: new Date(),
       },
     },
   });
+
+  // Delivery confirm may collect money, but it MUST NOT create AR Ledger.
+  // FundLedger is posted idempotently using the same source keys that accounting confirm uses,
+  // so later accounting confirmation will not duplicate cash/bank fund rows.
+  const fundLedgers = [];
+  const journals = [];
+  if (!isFailed && cashAmount > 0) {
+    const fund = await createFundOnce({
+      type: 'CASH_RECEIPT', method: 'cash', amount: cashAmount, date: confirmDate,
+      customerCode: order.customerCode, customerName: order.customerName,
+      salesOrderId: orderId, salesOrderCode: orderCode,
+      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
+      sourceType: 'cashReceipt', sourceId: orderId, sourceCode: orderCode,
+      note: 'THU TIỀN KHÁCH - app giao hàng', createdBy,
+    });
+    if (fund) fundLedgers.push(fund);
+    const journal = await createJournalOnce({
+      type: 'RECEIPT', amount: cashAmount, date: confirmDate,
+      customerCode: order.customerCode, customerName: order.customerName,
+      salesOrderId: orderId, salesOrderCode: orderCode,
+      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
+      sourceType: 'cashReceipt', sourceId: orderId, sourceCode: orderCode,
+      note: 'THU TIỀN KHÁCH - tiền mặt', createdBy,
+      lines: [
+        { accountCode: '111', accountName: 'Tiền mặt', debit: cashAmount, credit: 0 },
+        { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: cashAmount },
+      ],
+    });
+    if (journal) journals.push(journal);
+  }
+  if (!isFailed && bankAmount > 0) {
+    const fund = await createFundOnce({
+      type: 'BANK_RECEIPT', method: 'bank', amount: bankAmount, date: confirmDate,
+      customerCode: order.customerCode, customerName: order.customerName,
+      salesOrderId: orderId, salesOrderCode: orderCode,
+      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
+      sourceType: 'bankReceipt', sourceId: orderId, sourceCode: orderCode,
+      note: 'THU TIỀN KHÁCH - app giao hàng', createdBy,
+    });
+    if (fund) fundLedgers.push(fund);
+    const journal = await createJournalOnce({
+      type: 'RECEIPT', amount: bankAmount, date: confirmDate,
+      customerCode: order.customerCode, customerName: order.customerName,
+      salesOrderId: orderId, salesOrderCode: orderCode,
+      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
+      sourceType: 'bankReceipt', sourceId: orderId, sourceCode: orderCode,
+      note: 'THU TIỀN KHÁCH - chuyển khoản', createdBy,
+      lines: [
+        { accountCode: '112', accountName: 'Tiền gửi ngân hàng', debit: bankAmount, credit: 0 },
+        { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: bankAmount },
+      ],
+    });
+    if (journal) journals.push(journal);
+  }
 
   if (order.masterOrderId || order.masterOrderCode) {
     const siblings = await SalesOrder.find({
@@ -316,6 +456,9 @@ async function confirmDelivery(input = {}) {
     deliveryStatus: 'delivered',
     returnLineCount: returnLines.length,
     returnOrder,
+    fundLedgers,
+    journals,
+    accountingStatus: order.accountingStatus || 'pending',
   };
 }
 

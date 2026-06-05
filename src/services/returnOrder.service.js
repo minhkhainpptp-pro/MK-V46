@@ -3,7 +3,7 @@ const ReturnOrder = require('../models/ReturnOrder');
 const SalesOrder = require('../models/SalesOrder');
 const { normalizeOrderCode } = require('../utils/normalizeCode');
 const { roundMoney } = require('../utils/money.util');
-const arLedgerService = require('./arLedger.service');
+const { createArOnce, createInventoryOnce, createJournalOnce } = require('./accountingService');
 
 const EDITABLE_STATUS = ['pending'];
 
@@ -230,24 +230,92 @@ async function cancelReturnOrder(id, reason = '') {
 
 async function accountingConfirmReturnOrder(id, confirmedBy = '') {
   const existing = await findReturnOrderOrThrow(id);
-  if (existing.accountingStatus === 'confirmed' || existing.status === 'confirmed') {
+  if (['confirmed', 'posted'].includes(existing.accountingStatus) || ['confirmed', 'posted'].includes(existing.status)) {
     throw httpError('Phiếu trả đã được kế toán xác nhận', 409);
   }
   if (existing.status === 'cancelled') {
     throw httpError('Phiếu trả đã hủy, không thể xác nhận', 409);
   }
 
-  const arLedger = await arLedgerService.postReturnAr(existing, confirmedBy);
+  const roId = cleanText(existing.id || existing._id);
+  const amount = roundMoney(Number(existing.totalReturnAmount || existing.amount || 0));
+  const arLedger = amount > 0 ? await createArOnce({
+    type: 'AR-RETURN',
+    date: existing.deliveryDate || new Date().toISOString().slice(0, 10),
+    customerCode: existing.customerCode,
+    customerName: existing.customerName,
+    salesOrderId: existing.salesOrderId,
+    salesOrderCode: existing.salesOrderCode,
+    masterOrderId: existing.masterOrderId,
+    masterOrderCode: existing.masterOrderCode,
+    debit: 0,
+    credit: amount,
+    amount,
+    note: 'Giảm công nợ do hàng trả',
+    sourceType: 'returnOrder',
+    sourceId: roId,
+    sourceCode: existing.code,
+    createdBy: confirmedBy,
+  }) : null;
+
+  const inventoryLedgers = [];
+  const journals = [];
+  for (const line of existing.items || []) {
+    const qty = Math.abs(Number(line.returnQty || 0));
+    if (!qty) continue;
+    const inv = await createInventoryOnce({
+      transactionType: 'IN_RETURN',
+      productId: line.productCode,
+      productCode: line.productCode,
+      productName: line.productName,
+      warehouseId: line.warehouseCode || 'DEFAULT',
+      warehouseCode: line.warehouseCode || 'DEFAULT',
+      warehouseName: line.warehouseName,
+      qty,
+      unit: line.unit,
+      referenceType: 'returnOrder',
+      referenceId: `${roId}:${line.productCode}`,
+      referenceCode: existing.code,
+      note: 'Nhập kho hàng trả khi kế toán xác nhận phiếu trả',
+      createdBy: confirmedBy,
+    });
+    if (inv) inventoryLedgers.push(inv);
+  }
+
+  if (amount > 0) {
+    const journal = await createJournalOnce({
+      type: 'RETURN',
+      date: existing.deliveryDate || new Date().toISOString().slice(0, 10),
+      amount,
+      customerCode: existing.customerCode,
+      customerName: existing.customerName,
+      salesOrderId: existing.salesOrderId,
+      salesOrderCode: existing.salesOrderCode,
+      masterOrderId: existing.masterOrderId,
+      masterOrderCode: existing.masterOrderCode,
+      sourceType: 'returnOrder',
+      sourceId: roId,
+      sourceCode: existing.code,
+      note: 'Journal phiếu trả hàng',
+      createdBy: confirmedBy,
+      lines: [
+        { accountCode: 'HANGTRA', accountName: 'Hàng bán bị trả lại', debit: amount, credit: 0 },
+        { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: amount },
+      ],
+    });
+    if (journal) journals.push(journal);
+  }
+
   const updated = await ReturnOrder.findByIdAndUpdate(existing._id, {
     $set: {
-      status: 'confirmed',
-      accountingStatus: 'confirmed',
+      status: 'posted',
+      accountingStatus: 'posted',
       confirmedAt: new Date(),
       confirmedBy: cleanText(confirmedBy),
       arPosted: !!arLedger,
     },
   }, { new: true }).lean();
-  return { ...updated, arLedger };
+  return { ...updated, arLedger, inventoryLedgers, journals };
 }
 
 module.exports = {
