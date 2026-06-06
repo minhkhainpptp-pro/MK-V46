@@ -138,18 +138,40 @@ function normalizeSaleLine(line = {}) {
   };
 }
 
+function uniqueClean(values) {
+  return [...new Set((values || []).map(cleanText).filter(Boolean))];
+}
+
+function buildDeliverySalesFilter(query = {}) {
+  const deliveryDate = cleanText(query.deliveryDate);
+  const filter = {
+    deliveryDate,
+    status: { $ne: 'cancelled' },
+  };
+
+  const statusFilter = normalizeStatusFilter(query.status);
+  if (statusFilter) filter.status = statusFilter;
+  if (query.deliveryStaffCode) filter.deliveryStaffCode = cleanText(query.deliveryStaffCode);
+  if (query.salesStaffCode) filter.salesStaffCode = cleanText(query.salesStaffCode);
+
+  return filter;
+}
+
 async function findSalesOrdersFromMasters(query) {
+  const perf = { masterQueryMs: 0, salesQueryMs: 0, mode: 'master_fallback' };
   const masterFilter = {
     deliveryDate: cleanText(query.deliveryDate),
     status: { $ne: 'cancelled' },
   };
   if (query.deliveryStaffCode) masterFilter.deliveryStaffCode = cleanText(query.deliveryStaffCode);
 
+  const masterStartedAt = Date.now();
   const masters = await MasterOrder.find(masterFilter)
     .select('id code deliveryDate deliveryStaffCode deliveryStaffName salesOrderIds salesOrderCodes status deliveryStatus accountingStatus totalAmount')
     .sort({ code: 1 })
     .limit(300)
     .lean();
+  perf.masterQueryMs = Date.now() - masterStartedAt;
 
   const salesOrderIds = [];
   const salesOrderCodes = [];
@@ -167,36 +189,104 @@ async function findSalesOrdersFromMasters(query) {
   }
 
   if (!salesOrderIds.length && !salesOrderCodes.length) {
-    return { masters, orders: [], masterByOrderKey };
+    return { masters, orders: [], masterByOrderKey, perf };
   }
 
   const salesFilter = {
     status: { $ne: 'cancelled' },
     $or: [
-      { id: { $in: salesOrderIds } },
-      { code: { $in: salesOrderCodes } },
+      { id: { $in: uniqueClean(salesOrderIds) } },
+      { code: { $in: uniqueClean(salesOrderCodes) } },
     ],
   };
   const statusFilter = normalizeStatusFilter(query.status);
   if (statusFilter) salesFilter.status = statusFilter;
   if (query.salesStaffCode) salesFilter.salesStaffCode = cleanText(query.salesStaffCode);
 
+  const salesStartedAt = Date.now();
   const orders = await SalesOrder.find(salesFilter)
-    .select('id code customerCode customerName salesStaffCode salesStaffName deliveryStaffCode deliveryStaffName deliveryDate status deliveryStatus accountingStatus totalAmount payableAmount finalAmount masterOrderId masterOrderCode')
+    .select('id code customerCode customerName salesStaffCode salesStaffName deliveryStaffCode deliveryStaffName deliveryDate status deliveryStatus accountingStatus totalAmount payableAmount finalAmount itemCount cashAmount bankAmount bonusAmount masterOrderId masterOrderCode')
     .sort({ customerName: 1, code: 1 })
     .limit(500)
     .lean();
+  perf.salesQueryMs = Date.now() - salesStartedAt;
 
-  return { masters, orders, masterByOrderKey };
+  return { masters, orders, masterByOrderKey, perf };
+}
+
+async function findDeliverySalesOrders(query) {
+  const perf = {
+    masterQueryMs: 0,
+    salesQueryMs: 0,
+    mode: 'sales_direct',
+  };
+
+  const salesFilter = buildDeliverySalesFilter(query);
+
+  const salesStartedAt = Date.now();
+  let orders = await SalesOrder.find(salesFilter)
+    .select('id code customerCode customerName salesStaffCode salesStaffName deliveryStaffCode deliveryStaffName deliveryDate status deliveryStatus accountingStatus totalAmount payableAmount finalAmount itemCount cashAmount bankAmount bonusAmount masterOrderId masterOrderCode')
+    .sort({ customerName: 1, code: 1 })
+    .limit(500)
+    .lean();
+  perf.salesQueryMs = Date.now() - salesStartedAt;
+
+  let masterByOrderKey = new Map();
+
+  const missingMasterInfo = orders.some((order) => !cleanText(order.masterOrderCode) || !cleanText(order.deliveryStaffCode) || !cleanText(order.deliveryStaffName));
+  if (orders.length && missingMasterInfo) {
+    const ids = uniqueClean(orders.map((order) => order.id || order._id));
+    const codes = uniqueClean(orders.map((order) => order.code));
+    const masterFilter = {
+      deliveryDate: cleanText(query.deliveryDate),
+      status: { $ne: 'cancelled' },
+      $or: [
+        { salesOrderIds: { $in: ids } },
+        { salesOrderCodes: { $in: codes } },
+      ],
+    };
+    if (query.deliveryStaffCode) masterFilter.deliveryStaffCode = cleanText(query.deliveryStaffCode);
+
+    const masterStartedAt = Date.now();
+    const masters = await MasterOrder.find(masterFilter)
+      .select('id code deliveryDate deliveryStaffCode deliveryStaffName salesOrderIds salesOrderCodes status deliveryStatus accountingStatus totalAmount')
+      .sort({ code: 1 })
+      .limit(300)
+      .lean();
+    perf.masterQueryMs = Date.now() - masterStartedAt;
+
+    for (const master of masters) {
+      for (const key of [...(master.salesOrderIds || []), ...(master.salesOrderCodes || [])].map(cleanText).filter(Boolean)) {
+        masterByOrderKey.set(key, master);
+      }
+    }
+  }
+
+  if (!orders.length) {
+    const fallback = await findSalesOrdersFromMasters(query);
+    return {
+      orders: fallback.orders,
+      masterByOrderKey: fallback.masterByOrderKey,
+      perf: {
+        masterQueryMs: fallback.perf.masterQueryMs,
+        salesQueryMs: perf.salesQueryMs + fallback.perf.salesQueryMs,
+        mode: 'master_fallback',
+      },
+    };
+  }
+
+  return { orders, masterByOrderKey, perf };
 }
 
 async function listDeliveryOrders(query = {}) {
   const startedAt = Date.now();
   if (!query.deliveryDate) throw httpError('Thiếu ngày giao', 400);
 
-  const masterStartedAt = Date.now();
-  const { orders, masterByOrderKey } = await findSalesOrdersFromMasters(query);
-  const masterQueryMs = Date.now() - masterStartedAt;
+  const orderQueryResult = await findDeliverySalesOrders(query);
+  const { orders, masterByOrderKey } = orderQueryResult;
+  const masterQueryMs = orderQueryResult.perf.masterQueryMs;
+  const salesQueryMs = orderQueryResult.perf.salesQueryMs;
+  const queryMode = orderQueryResult.perf.mode;
 
   const ids = orders.map((order) => cleanText(order.id || order._id)).filter(Boolean);
   const codes = orders.map((order) => cleanText(order.code)).filter(Boolean);
@@ -256,7 +346,18 @@ async function listDeliveryOrders(query = {}) {
   });
   const buildRowsMs = Date.now() - buildStartedAt;
 
-  return { rows, total: rows.length, perf: { totalMs: Date.now() - startedAt, masterQueryMs, salesQueryMs: masterQueryMs, returnQueryMs, buildRowsMs } };
+  return {
+    rows,
+    total: rows.length,
+    perf: {
+      totalMs: Date.now() - startedAt,
+      masterQueryMs,
+      salesQueryMs,
+      returnQueryMs,
+      buildRowsMs,
+      queryMode,
+    },
+  };
 }
 
 async function getDeliveryOrderDetail(id) {

@@ -27,6 +27,9 @@ const schema = createBaseSchema({
 });
 
 schema.index({ deliveryDate: 1, deliveryStaffCode: 1 }, { name: 'idx_mo_delivery_staff' });
+schema.index({ deliveryDate: 1, status: 1 }, { name: 'idx_mo_delivery_status' });
+schema.index({ deliveryDate: 1, salesOrderIds: 1 }, { name: 'idx_mo_delivery_sales_order_ids' });
+schema.index({ deliveryDate: 1, salesOrderCodes: 1 }, { name: 'idx_mo_delivery_sales_order_codes' });
 schema.index({ accountingStatus: 1, deliveryDate: 1 }, { name: 'idx_mo_accounting_date' });
 
 module.exports = mongoose.models.MasterOrder || mongoose.model('MasterOrder', schema, 'masterOrders');

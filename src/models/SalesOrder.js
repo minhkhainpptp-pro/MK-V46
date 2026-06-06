@@ -62,6 +62,8 @@ const schema = createBaseSchema({
   note: { type: String, default: '' },
 });
 
+schema.index({ id: 1 }, { name: 'idx_so_id' });
+schema.index({ deliveryDate: 1, status: 1 }, { name: 'idx_so_delivery_status' });
 schema.index({ deliveryDate: 1, deliveryStaffCode: 1, status: 1 }, { name: 'idx_so_delivery_staff_status' });
 schema.index({ deliveryDate: 1, salesStaffCode: 1, status: 1 }, { name: 'idx_so_delivery_sales_status' });
 schema.index({ masterOrderId: 1 }, { name: 'idx_so_master_order_id' });

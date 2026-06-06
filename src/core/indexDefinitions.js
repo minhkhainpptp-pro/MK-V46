@@ -30,6 +30,7 @@ const indexDefinitions = [
   { model: SalesOrder, keys: { id: 1 }, options: { name: 'idx_so_id' } },
   { model: SalesOrder, keys: { code: 1 }, options: { name: 'idx_so_code_unique', unique: true, partialFilterExpression: stringExists('code') } },
   { model: SalesOrder, keys: { normalizedCode: 1 }, options: { name: 'idx_so_normalized_code_unique', unique: true, partialFilterExpression: stringExists('normalizedCode') } },
+  { model: SalesOrder, keys: { deliveryDate: 1, status: 1 }, options: { name: 'idx_so_delivery_status' } },
   { model: SalesOrder, keys: { deliveryDate: 1, deliveryStaffCode: 1, status: 1 }, options: { name: 'idx_so_delivery_staff_status' } },
   { model: SalesOrder, keys: { deliveryDate: 1, salesStaffCode: 1, status: 1 }, options: { name: 'idx_so_delivery_sales_status' } },
   { model: SalesOrder, keys: { masterOrderId: 1 }, options: { name: 'idx_so_master_order_id' } },
@@ -39,6 +40,9 @@ const indexDefinitions = [
   { model: MasterOrder, keys: { id: 1 }, options: { name: 'idx_mo_id' } },
   { model: MasterOrder, keys: { code: 1 }, options: { name: 'idx_mo_code_unique', unique: true, partialFilterExpression: stringExists('code') } },
   { model: MasterOrder, keys: { deliveryDate: 1, deliveryStaffCode: 1 }, options: { name: 'idx_mo_delivery_staff' } },
+  { model: MasterOrder, keys: { deliveryDate: 1, status: 1 }, options: { name: 'idx_mo_delivery_status' } },
+  { model: MasterOrder, keys: { deliveryDate: 1, salesOrderIds: 1 }, options: { name: 'idx_mo_delivery_sales_order_ids' } },
+  { model: MasterOrder, keys: { deliveryDate: 1, salesOrderCodes: 1 }, options: { name: 'idx_mo_delivery_sales_order_codes' } },
 
   { model: ReturnOrder, keys: { id: 1 }, options: { name: 'idx_ro_id' } },
   { model: ReturnOrder, keys: { code: 1 }, options: { name: 'idx_ro_code' } },
