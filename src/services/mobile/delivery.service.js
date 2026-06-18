@@ -1,624 +1,649 @@
-const mongoose = require('mongoose');
-const MasterOrder = require('../../models/MasterOrder');
+'use strict';
+
+const deliveryFinance = require('../../utils/deliveryFinance.util');
+const DeliverySettlementService = require('../../domain/settlement/DeliverySettlementService');
+
+const dateUtil = require('../../utils/date.util');
+const { withMongoTransaction } = require('../../utils/transaction.util');
+const { createMobileDeliveryRepository } = require('../../repositories/mobile/delivery.repository');
+const returnOrderService = require('../returnOrderService');
+const returnOrderRepository = require('../../repositories/returnOrderRepository');
+const { createStepTimer, getIdempotencyKey, readIdempotentResult, rememberIdempotentResult } = require('../../utils/mobilePerformance.util');
+const { DeliveryEngine } = require('../../engines/delivery.engine');
+const { beginRequest, completeRequest } = require('../requestIdempotency.service');
 const SalesOrder = require('../../models/SalesOrder');
+const MasterOrder = require('../../models/MasterOrder');
 const ReturnOrder = require('../../models/ReturnOrder');
-const FundLedger = require('../../models/FundLedger');
-const Journal = require('../../models/Journal');
-const returnOrderService = require('../returnOrder.service');
-const { roundMoney } = require('../../utils/money.util');
-const { withTransaction, acquireOperation, completeOperation } = require('../../core/operationGuard');
-const { writeAuditLog } = require('../../core/audit');
+const StockTransaction = require('../../models/StockTransaction');
+const ArLedger = require('../../models/ArLedger');
+const User = require('../../models/User');
 
-function httpError(message, status = 400) {
-  return Object.assign(new Error(message), { status });
-}
-
-function cleanText(value) {
-  return String(value || '').trim();
-}
-
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function amountOf(value) {
-  return roundMoney(Number(value || 0));
-}
-
-function makeCode(prefix, sourceCode) {
-  return `${prefix}-${cleanText(sourceCode) || Date.now()}`;
-}
-
-async function createFundOnce(payload, options = {}) {
-  const session = options.session;
-  const sourceType = cleanText(payload.sourceType);
-  const sourceId = cleanText(payload.sourceId);
-  const type = cleanText(payload.type);
-  if (sourceType && sourceId && type) {
-    const existedQuery = FundLedger.findOne({ sourceType, sourceId, type });
-    if (session) existedQuery.session(session);
-    const existed = await existedQuery.lean();
-    if (existed) return existed;
+function createMobileDeliveryService(ctx) {
+  const repo = createMobileDeliveryRepository(ctx);
+  async function persistDeliverySnapshotSafely(data = {}) {
+    // returnOrders is managed by returnOrderService/returnOrderRepository only.
+    // Never send returnOrders into primary-data snapshot persistence.
+    const snapshot = data ? { ...data } : data;
+    if (snapshot) delete snapshot.returnOrders;
+    return (repo.persistDeliverySnapshotSafely ? repo.persistDeliverySnapshotSafely(snapshot) : repo.persistPrimaryDataSnapshot(snapshot));
   }
-  const amount = amountOf(payload.amount);
-  if (amount <= 0) return null;
-  const [doc] = await FundLedger.create([{
-    id: cleanText(payload.id) || makeCode('FL', `${type}-${sourceId}`),
-    code: cleanText(payload.code) || makeCode(type, payload.sourceCode || sourceId),
-    type,
-    method: cleanText(payload.method) || (type === 'BANK_RECEIPT' ? 'bank' : 'cash'),
-    amount,
-    date: cleanText(payload.date) || today(),
-    customerCode: cleanText(payload.customerCode),
-    customerName: cleanText(payload.customerName),
-    salesOrderId: cleanText(payload.salesOrderId),
-    salesOrderCode: cleanText(payload.salesOrderCode),
-    masterOrderId: cleanText(payload.masterOrderId),
-    masterOrderCode: cleanText(payload.masterOrderCode),
-    note: cleanText(payload.note),
-    sourceType,
-    sourceId,
-    createdBy: cleanText(payload.createdBy),
-  }], session ? { session } : undefined);
-  return doc.toObject();
-}
 
-async function createJournalOnce(payload, options = {}) {
-  const session = options.session;
-  const sourceType = cleanText(payload.sourceType);
-  const sourceId = cleanText(payload.sourceId);
-  const type = cleanText(payload.type);
-  if (sourceType && sourceId && type) {
-    const existedQuery = Journal.findOne({ sourceType, sourceId, type });
-    if (session) existedQuery.session(session);
-    const existed = await existedQuery.lean();
-    if (existed) return existed;
-  }
-  const amount = amountOf(payload.amount);
-  if (amount <= 0) return null;
-  const [doc] = await Journal.create([{
-    id: cleanText(payload.id) || makeCode('JNL', `${type}-${sourceId}`),
-    code: cleanText(payload.code) || makeCode(`JNL-${type}`, payload.sourceCode || sourceId),
-    type,
-    date: cleanText(payload.date) || today(),
-    customerCode: cleanText(payload.customerCode),
-    customerName: cleanText(payload.customerName),
-    salesOrderId: cleanText(payload.salesOrderId),
-    salesOrderCode: cleanText(payload.salesOrderCode),
-    masterOrderId: cleanText(payload.masterOrderId),
-    masterOrderCode: cleanText(payload.masterOrderCode),
-    amount,
-    lines: Array.isArray(payload.lines) ? payload.lines : [],
-    sourceType,
-    sourceId,
-    sourceCode: cleanText(payload.sourceCode),
-    note: cleanText(payload.note),
-    createdBy: cleanText(payload.createdBy),
-  }], session ? { session } : undefined);
-  return doc.toObject();
-}
+  const {
+    normalizeText,
+    toNumber,
+    isDeliveryOrderActive,
+    createReceiptDocument,
+    auditLog,
+    writeMobileLog,
+    writeMobileLogDirect,
+    buildReturnItemsFromRequest,
+    createReturnOrderDocument,
+    makeId,
+    buildCashCode
+  } = ctx;
 
-function objectIdOrNull(value) {
-  const key = cleanText(value);
-  return mongoose.Types.ObjectId.isValid(key) ? key : null;
-}
+  
 
-function buildOrderLookup(id) {
-  const key = cleanText(id);
-  const or = [{ id: key }, { code: key }];
-  const objectId = objectIdOrNull(key);
-  if (objectId) or.push({ _id: objectId });
-  return { $or: or };
-}
+  
 
-function normalizeStatusFilter(status) {
-  const value = cleanText(status).toLowerCase();
-  if (!value || value === 'all' || value === 'tat-ca' || value === 'tất cả') return null;
-  if (['pending', 'assigned', 'not_delivered', 'chua-giao', 'chưa giao'].includes(value)) {
-    return { $nin: ['delivered', 'accounting_confirmed', 'cancelled'] };
-  }
-  if (['delivered', 'done', 'da-giao', 'đã giao'].includes(value)) return 'delivered';
-  return cleanText(status);
-}
+  
 
-function normalizeSaleLine(line = {}) {
-  const orderedQty = Number(line.quantity ?? line.qty ?? line.orderedQty ?? 0);
-  const deliveredQty = Number(line.deliveredQty ?? orderedQty);
-  const salePrice = Number(line.salePrice ?? line.price ?? 0);
-  return {
-    productCode: cleanText(line.productCode),
-    productName: cleanText(line.productName),
-    unit: cleanText(line.unit),
-    orderedQty,
-    deliveredQty,
-    returnQty: Math.max(orderedQty - deliveredQty, 0),
-    salePrice,
-    returnAmount: 0,
-  };
-}
 
-function uniqueClean(values) {
-  return [...new Set((values || []).map(cleanText).filter(Boolean))];
-}
-
-function buildDeliverySalesFilter(query = {}) {
-  const deliveryDate = cleanText(query.deliveryDate);
-  const filter = {
-    deliveryDate,
-    status: { $ne: 'cancelled' },
-  };
-
-  const statusFilter = normalizeStatusFilter(query.status);
-  if (statusFilter) filter.status = statusFilter;
-  if (query.deliveryStaffCode) filter.deliveryStaffCode = cleanText(query.deliveryStaffCode);
-  if (query.salesStaffCode) filter.salesStaffCode = cleanText(query.salesStaffCode);
-
-  return filter;
-}
-
-async function findSalesOrdersFromMasters(query) {
-  const perf = { masterQueryMs: 0, salesQueryMs: 0, mode: 'master_fallback' };
-  const masterFilter = {
-    deliveryDate: cleanText(query.deliveryDate),
-    status: { $ne: 'cancelled' },
-  };
-  if (query.deliveryStaffCode) masterFilter.deliveryStaffCode = cleanText(query.deliveryStaffCode);
-
-  const masterStartedAt = Date.now();
-  const masters = await MasterOrder.find(masterFilter)
-    .select('id code deliveryDate deliveryStaffCode deliveryStaffName salesOrderIds salesOrderCodes status deliveryStatus accountingStatus totalAmount')
-    .sort({ code: 1 })
-    .limit(300)
-    .lean();
-  perf.masterQueryMs = Date.now() - masterStartedAt;
-
-  const salesOrderIds = [];
-  const salesOrderCodes = [];
-  const masterByOrderKey = new Map();
-
-  for (const master of masters) {
-    for (const id of (master.salesOrderIds || []).map(cleanText).filter(Boolean)) {
-      salesOrderIds.push(id);
-      masterByOrderKey.set(id, master);
+  async function findReturnOrdersForOrders(orders = []) {
+    const orderIds = [...new Set((orders || []).flatMap((order) => [order.id, order._id, order.salesOrderId, order.orderId]).map((v) => String(v || '').trim()).filter(Boolean))];
+    const orderCodes = [...new Set((orders || []).flatMap((order) => [order.code, order.orderCode, order.salesOrderCode]).map((v) => String(v || '').trim()).filter(Boolean))];
+    const or = [];
+    if (orderIds.length) {
+      or.push({ salesOrderId: { $in: orderIds } });
+      or.push({ orderId: { $in: orderIds } });
+      or.push({ sourceOrderId: { $in: orderIds } });
+      or.push({ deliveryOrderId: { $in: orderIds } });
     }
-    for (const code of (master.salesOrderCodes || []).map(cleanText).filter(Boolean)) {
-      salesOrderCodes.push(code);
-      masterByOrderKey.set(code, master);
+    if (orderCodes.length) {
+      or.push({ salesOrderCode: { $in: orderCodes } });
+      or.push({ orderCode: { $in: orderCodes } });
+      or.push({ sourceOrderCode: { $in: orderCodes } });
+      or.push({ deliveryOrderCode: { $in: orderCodes } });
     }
+    if (!or.length) return [];
+    return returnOrderRepository.findAll({ $or: or }, {
+      projection: {
+        id: 1, code: 1, salesOrderId: 1, salesOrderCode: 1, orderId: 1, orderCode: 1,
+        sourceOrderId: 1, sourceOrderCode: 1, deliveryOrderId: 1, deliveryOrderCode: 1,
+        masterReturnOrderId: 1, masterReturnOrderCode: 1, returnMergeStatus: 1, warehouseReceiveStatus: 1,
+        status: 1, items: 1, totalAmount: 1, amount: 1, debtReduction: 1
+      }
+    });
   }
 
-  if (!salesOrderIds.length && !salesOrderCodes.length) {
-    return { masters, orders: [], masterByOrderKey, perf };
+  function getActiveReturnOrdersForSalesOrder(data = {}, order = {}) {
+    const orderId = String(order.id || '').trim();
+    const orderCode = String(order.code || '').trim();
+    return (Array.isArray(data.returnOrders) ? data.returnOrders : []).filter((row) => {
+      const status = String(row.status || '').toLowerCase();
+      if (['cancelled', 'canceled', 'void', 'deleted'].includes(status)) return false;
+      const rowOrderId = String(row.salesOrderId || row.orderId || '').trim();
+      const rowOrderCode = String(row.salesOrderCode || row.orderCode || '').trim();
+      return (orderId && rowOrderId === orderId) || (orderCode && rowOrderCode === orderCode);
+    });
   }
 
-  const salesFilter = {
-    status: { $ne: 'cancelled' },
-    $or: [
-      { id: { $in: uniqueClean(salesOrderIds) } },
-      { code: { $in: uniqueClean(salesOrderCodes) } },
-    ],
-  };
-  const statusFilter = normalizeStatusFilter(query.status);
-  if (statusFilter) salesFilter.status = statusFilter;
-  if (query.salesStaffCode) salesFilter.salesStaffCode = cleanText(query.salesStaffCode);
 
-  const salesStartedAt = Date.now();
-  const orders = await SalesOrder.find(salesFilter)
-    .select('id code customerCode customerName salesStaffCode salesStaffName deliveryStaffCode deliveryStaffName deliveryDate status deliveryStatus accountingStatus totalAmount payableAmount finalAmount itemCount cashAmount bankAmount bonusAmount masterOrderId masterOrderCode')
-    .sort({ customerName: 1, code: 1 })
-    .limit(500)
-    .lean();
-  perf.salesQueryMs = Date.now() - salesStartedAt;
+  function isReturnOrderLocked(row = {}) {
+    const mergeStatus = String(row.returnMergeStatus || '').toLowerCase();
+    const warehouseStatus = String(row.warehouseReceiveStatus || '').toLowerCase();
+    const status = String(row.status || '').toLowerCase();
+    return mergeStatus === 'merged'
+      || Boolean(row.masterReturnOrderId || row.masterReturnOrderCode)
+      || ['received', 'posted', 'completed'].includes(warehouseStatus)
+      || ['received', 'posted', 'completed'].includes(status);
+  }
 
-  return { masters, orders, masterByOrderKey, perf };
-}
+  function getLockedReturnOrderForSalesOrder(data = {}, order = {}) {
+    return getActiveReturnOrdersForSalesOrder(data, order).find(isReturnOrderLocked) || null;
+  }
 
-async function findDeliverySalesOrders(query) {
-  const perf = {
-    masterQueryMs: 0,
-    salesQueryMs: 0,
-    mode: 'sales_direct',
-  };
+  function normalizeReturnLineCode(item = {}) {
+    return String(item.productCode || item.code || item.productId || item.sku || '').trim();
+  }
 
-  const salesFilter = buildDeliverySalesFilter(query);
+  function getReturnLineQty(item = {}) {
+    return toNumber(item.qtyReturn ?? item.returnQty ?? item.returnQuantity ?? item.returnedQty ?? item.quantity ?? item.qty ?? 0);
+  }
 
-  const salesStartedAt = Date.now();
-  let orders = await SalesOrder.find(salesFilter)
-    .select('id code customerCode customerName salesStaffCode salesStaffName deliveryStaffCode deliveryStaffName deliveryDate status deliveryStatus accountingStatus totalAmount payableAmount finalAmount itemCount cashAmount bankAmount bonusAmount masterOrderId masterOrderCode')
-    .sort({ customerName: 1, code: 1 })
-    .limit(500)
-    .lean();
-  perf.salesQueryMs = Date.now() - salesStartedAt;
+  function getReturnLinePrice(item = {}) {
+    // DELIVERY_LOCKED_PRICE_READ_START
+    // App giao hàng chỉ đọc giá đã khóa trên đơn; không tính lại khuyến mại.
+    return toNumber(item.unitPrice ?? item.price ?? item.salePrice ?? item.finalPrice ?? item.giaBan ?? 0);
+    // DELIVERY_LOCKED_PRICE_READ_END
+  }
 
-  let masterByOrderKey = new Map();
-
-  const missingMasterInfo = orders.some((order) => !cleanText(order.masterOrderCode) || !cleanText(order.deliveryStaffCode) || !cleanText(order.deliveryStaffName));
-  if (orders.length && missingMasterInfo) {
-    const ids = uniqueClean(orders.map((order) => order.id || order._id));
-    const codes = uniqueClean(orders.map((order) => order.code));
-    const masterFilter = {
-      deliveryDate: cleanText(query.deliveryDate),
-      status: { $ne: 'cancelled' },
-      $or: [
-        { salesOrderIds: { $in: ids } },
-        { salesOrderCodes: { $in: codes } },
-      ],
-    };
-    if (query.deliveryStaffCode) masterFilter.deliveryStaffCode = cleanText(query.deliveryStaffCode);
-
-    const masterStartedAt = Date.now();
-    const masters = await MasterOrder.find(masterFilter)
-      .select('id code deliveryDate deliveryStaffCode deliveryStaffName salesOrderIds salesOrderCodes status deliveryStatus accountingStatus totalAmount')
-      .sort({ code: 1 })
-      .limit(300)
-      .lean();
-    perf.masterQueryMs = Date.now() - masterStartedAt;
-
-    for (const master of masters) {
-      for (const key of [...(master.salesOrderIds || []), ...(master.salesOrderCodes || [])].map(cleanText).filter(Boolean)) {
-        masterByOrderKey.set(key, master);
+  function getReturnOrderItemsForSalesOrder(data = {}, order = {}) {
+    const merged = new Map();
+    for (const returnOrder of getActiveReturnOrdersForSalesOrder(data, order)) {
+      for (const item of (Array.isArray(returnOrder.items) ? returnOrder.items : [])) {
+        const code = normalizeReturnLineCode(item);
+        if (!code) continue;
+        const prev = merged.get(code) || {
+          productCode: code,
+          productName: item.productName || item.name || '',
+          qtyReturn: 0,
+          returnQuantity: 0,
+          returnedQty: 0,
+          quantity: 0,
+          price: getReturnLinePrice(item),
+          salePrice: getReturnLinePrice(item),
+          unitPrice: getReturnLinePrice(item),
+          amount: 0
+        };
+        const qty = getReturnLineQty(item);
+        const price = getReturnLinePrice(item) || prev.price || prev.salePrice || 0;
+        prev.productName = prev.productName || item.productName || item.name || '';
+        prev.qtyReturn += qty;
+        prev.returnQuantity = prev.qtyReturn;
+        prev.returnedQty = prev.qtyReturn;
+        prev.quantity = prev.qtyReturn;
+        prev.price = price;
+        prev.salePrice = price;
+        prev.unitPrice = price;
+        prev.amount += Math.round(qty * price);
+        merged.set(code, prev);
       }
     }
+    return Array.from(merged.values());
   }
 
-  if (!orders.length) {
-    const fallback = await findSalesOrdersFromMasters(query);
-    return {
-      orders: fallback.orders,
-      masterByOrderKey: fallback.masterByOrderKey,
-      perf: {
-        masterQueryMs: fallback.perf.masterQueryMs,
-        salesQueryMs: perf.salesQueryMs + fallback.perf.salesQueryMs,
-        mode: 'master_fallback',
-      },
-    };
+  function mergeOrderItemsWithReturnItems(order = {}, returnItems = []) {
+    const returnByCode = new Map(returnItems.map((item) => [normalizeReturnLineCode(item), item]));
+    return (Array.isArray(order.items) ? order.items : []).map((item) => {
+      const code = normalizeReturnLineCode(item);
+      const returned = returnByCode.get(code);
+      const qtyReturn = returned ? getReturnLineQty(returned) : 0;
+      const price = returned ? getReturnLinePrice(returned) : 0;
+      return {
+        ...item,
+        qtyReturn,
+        returnQuantity: qtyReturn,
+        returnedQty: qtyReturn,
+        returnAmount: Math.round(qtyReturn * (price || toNumber(item.price ?? item.salePrice ?? item.unitPrice ?? 0)))
+      };
+    });
   }
 
-  return { orders, masterByOrderKey, perf };
-}
+  function syncOrderReturnAmountFromReturnOrders(data = {}, order = {}) {
+    const returnItems = getReturnOrderItemsForSalesOrder(data, order);
+    const total = returnItems.reduce((sum, item) => sum + toNumber(item.amount ?? getReturnLineQty(item) * getReturnLinePrice(item)), 0);
+    order.returnItems = returnItems;
+    order.deliveryReturnItems = returnItems;
+    order.returnAmount = total;
+    order.returnedAmount = total;
+    order.items = mergeOrderItemsWithReturnItems(order, returnItems);
+    order.debtBeforeCollection = deliveryFinance.deliveryDebtBase(order);
+    order.debtAmount = deliveryFinance.calculateDeliveryDebt(order);
+    order.debt = order.debtAmount;
+    return { total, returnItems };
+  }
 
-async function listDeliveryOrders(query = {}) {
-  const startedAt = Date.now();
-  if (!query.deliveryDate) throw httpError('Thiếu ngày giao', 400);
-
-  const orderQueryResult = await findDeliverySalesOrders(query);
-  const { orders, masterByOrderKey } = orderQueryResult;
-  const masterQueryMs = orderQueryResult.perf.masterQueryMs;
-  const salesQueryMs = orderQueryResult.perf.salesQueryMs;
-  const queryMode = orderQueryResult.perf.mode;
-
-  const ids = orders.map((order) => cleanText(order.id || order._id)).filter(Boolean);
-  const codes = orders.map((order) => cleanText(order.code)).filter(Boolean);
-
-  const returnStartedAt = Date.now();
-  const returns = ids.length || codes.length ? await ReturnOrder.find({
-    status: { $nin: ['cancelled'] },
-    $or: [{ salesOrderId: { $in: ids } }, { salesOrderCode: { $in: codes } }],
-  }).select('salesOrderId salesOrderCode totalReturnQty totalReturnAmount amount items').lean() : [];
-  const returnQueryMs = Date.now() - returnStartedAt;
-
-  const returnMap = new Map();
-  for (const ro of returns) {
-    const amount = Number(ro.totalReturnAmount || ro.amount || 0);
-    const qty = Number(ro.totalReturnQty || 0);
-    for (const key of [ro.salesOrderId, ro.salesOrderCode].map(cleanText).filter(Boolean)) {
-      const current = returnMap.get(key) || { qty: 0, amount: 0 };
-      current.qty += qty;
-      current.amount += amount;
-      returnMap.set(key, current);
+  function activeLedgerBalanceByOrder(rows = []) {
+    const balances = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const delta = toNumber(row.debit) - toNumber(row.credit);
+      const keys = [row.orderId, row.salesOrderId, row.orderCode, row.salesOrderCode, row.refId, row.refCode]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+      for (const key of keys) balances.set(key, toNumber(balances.get(key)) + delta);
     }
+    return balances;
   }
 
-  const buildStartedAt = Date.now();
-  const rows = orders.map((order) => {
-    const orderId = cleanText(order.id || order._id);
-    const orderCode = cleanText(order.code);
-    const master = masterByOrderKey.get(orderId) || masterByOrderKey.get(orderCode) || {};
-    const totalAmount = roundMoney(Number(order.payableAmount ?? order.finalAmount ?? order.totalAmount ?? 0));
-    const ret = returnMap.get(orderId) || returnMap.get(orderCode) || { qty: 0, amount: 0 };
-    const paidAmount = roundMoney(Number(order.cashAmount || 0) + Number(order.bankAmount || 0) + Number(order.bonusAmount || 0));
+  function masterOrderLookup(rows = []) {
+    const map = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      [row.id, row._id, row.code]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .forEach((key) => map.set(key, row));
+    }
+    return map;
+  }
+
+  function scopedDeliveryRow(order = {}, masterMap = new Map(), debtByOrder = new Map()) {
+    const masterKey = String(order.masterOrderId || order.masterOrderCode || '').trim();
+    const master = masterMap.get(masterKey) || {};
+    const orderKeys = [order.id, order._id, order.code, order.orderCode, order.salesOrderCode]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+    const ledgerBalance = orderKeys.reduce((value, key) => debtByOrder.has(key) ? debtByOrder.get(key) : value, null);
+    const fallbackDebt = toNumber(order.debtAmount ?? order.debt ?? order.arBalance ?? order.totalAmount);
+    const debtAmount = ledgerBalance == null ? fallbackDebt : Math.max(0, Math.round(ledgerBalance));
+    const deliveryStatus = String(order.deliveryStatus || order.status || 'pending').trim().toLowerCase();
+
     return {
-      id: orderId,
-      code: orderCode,
-      salesOrderId: orderId,
-      salesOrderCode: orderCode,
-      customerCode: order.customerCode || '',
-      customerName: order.customerName || '',
-      salesStaffCode: order.salesStaffCode || '',
-      salesStaffName: order.salesStaffName || '',
+      ...order,
+      deliveryDate: order.deliveryDate || master.deliveryDate || order.orderDate || order.date || '',
       deliveryStaffCode: order.deliveryStaffCode || master.deliveryStaffCode || '',
       deliveryStaffName: order.deliveryStaffName || master.deliveryStaffName || '',
-      deliveryDate: order.deliveryDate || master.deliveryDate || query.deliveryDate,
-      masterOrderId: order.masterOrderId || cleanText(master.id || master._id),
+      routeName: order.routeName || master.routeName || '',
+      masterOrderId: order.masterOrderId || master.id || '',
       masterOrderCode: order.masterOrderCode || master.code || '',
-      itemCount: Number(order.itemCount || 0),
-      totalAmount,
-      finalAmount: totalAmount,
-      returnQty: ret.qty,
-      returnAmount: roundMoney(ret.amount),
-      paidAmount,
-      debtAmount: roundMoney(totalAmount - ret.amount - paidAmount),
-      status: order.status || '',
-      deliveryStatus: order.deliveryStatus || '',
-      accountingStatus: order.accountingStatus || '',
+      arBalance: debtAmount,
+      debtAmount,
+      debt: debtAmount,
+      deliveryStatus,
+      visualStatus: deliveryStatus,
+      isLate: false
     };
-  });
-  const buildRowsMs = Date.now() - buildStartedAt;
+  }
 
-  return {
-    rows,
-    total: rows.length,
-    perf: {
-      totalMs: Date.now() - startedAt,
-      masterQueryMs,
-      salesQueryMs,
-      returnQueryMs,
-      buildRowsMs,
-      queryMode,
-    },
-  };
-}
+  async function listDeliveryOrders({ query = {}, mobileUser }) {
+    const totalStartedAt = Date.now();
+    const targetDate = dateUtil.toDateOnly(query.date || dateUtil.todayVN());
+    const q = normalizeText(query.q);
+    const status = normalizeText(query.status);
+    const includeCompleted = ['1', 'true'].includes(String(query.includeCompleted || '').toLowerCase());
+    const actorCode = String(
+      mobileUser.deliveryStaffCode || mobileUser.staffCode || mobileUser.code || ''
+    ).trim();
 
-async function getDeliveryOrderDetail(id) {
-  const order = await SalesOrder.findOne(buildOrderLookup(id)).lean();
-  if (!order) throw httpError('Không tìm thấy đơn giao', 404);
-
-  const returnResult = await returnOrderService.getReturnOrdersBySalesOrder(order.id || order.code);
-  const returnLineMap = new Map();
-  for (const returnOrder of returnResult.rows || []) {
-    for (const line of returnOrder.items || []) {
-      const key = cleanText(line.productCode);
-      if (!key) continue;
-      const current = returnLineMap.get(key) || { returnQty: 0, returnAmount: 0 };
-      current.returnQty += Number(line.returnQty || 0);
-      current.returnAmount += Number(line.returnAmount || 0);
-      returnLineMap.set(key, current);
+    if (!actorCode) {
+      return { ok: true, date: targetDate, user: {}, items: [], perf: { totalMs: Date.now() - totalStartedAt, rows: 0 } };
     }
-  }
 
-  const items = (order.items || []).map((line) => {
-    const base = normalizeSaleLine(line);
-    const savedReturn = returnLineMap.get(base.productCode) || { returnQty: 0, returnAmount: 0 };
-    return {
-      ...base,
-      returnQty: savedReturn.returnQty || base.returnQty,
-      returnAmount: roundMoney(savedReturn.returnAmount || ((savedReturn.returnQty || base.returnQty) * base.salePrice)),
-    };
-  });
-
-  return {
-    salesOrderId: cleanText(order.id || order._id),
-    salesOrderCode: order.code,
-    customerCode: order.customerCode,
-    customerName: order.customerName,
-    deliveryDate: order.deliveryDate,
-    status: order.status,
-    deliveryStatus: order.deliveryStatus,
-    accountingStatus: order.accountingStatus,
-    totalAmount: roundMoney(Number(order.finalAmount ?? order.totalAmount ?? 0)),
-    items,
-    returnOrders: returnResult.rows || [],
-  };
-}
-
-function normalizeConfirmLines(inputItems, salesOrder) {
-  const salesItems = Array.isArray(salesOrder.items) ? salesOrder.items : [];
-  const salesItemMap = new Map(salesItems.map((item) => [cleanText(item.productCode), item]));
-  const rawItems = Array.isArray(inputItems) ? inputItems : [];
-
-  return rawItems.map((line, index) => {
-    const productCode = cleanText(line.productCode);
-    if (!productCode) throw httpError(`Dòng ${index + 1}: thiếu mã sản phẩm`, 400);
-    const saleLine = salesItemMap.get(productCode) || {};
-    const orderedQty = Number(line.orderedQty ?? saleLine.quantity ?? saleLine.qty ?? 0);
-    const deliveredQty = Number(line.deliveredQty ?? Math.max(orderedQty - Number(line.returnQty || 0), 0));
-    const returnQty = Number(line.returnQty ?? Math.max(orderedQty - deliveredQty, 0));
-    const salePrice = Number(saleLine.price ?? line.salePrice ?? 0);
-    if (returnQty < 0) throw httpError(`Dòng ${index + 1}: SL trả không được âm`, 400);
-    if (orderedQty > 0 && returnQty > orderedQty) throw httpError(`Dòng ${index + 1}: SL trả không được lớn hơn SL đặt`, 400);
-    return {
-      productCode,
-      productName: cleanText(line.productName || saleLine.productName),
-      orderedQty,
-      deliveredQty,
-      returnQty,
-      salePrice,
-      returnAmount: roundMoney(returnQty * salePrice),
-    };
-  });
-}
-
-async function confirmDelivery(input = {}) {
-  const salesOrderId = cleanText(input.salesOrderId || input.id || input.salesOrderCode || input.code);
-  const operationId = cleanText(input.operationId) || `CONFIRM_DELIVERY:${salesOrderId}`;
-
-  return withTransaction(async (session) => {
-    await acquireOperation({
-      operationId,
-      type: 'CONFIRM_DELIVERY',
-      referenceId: salesOrderId,
-      referenceCode: cleanText(input.salesOrderCode || input.code),
-      userCode: cleanText(input.createdBy || input.deliveryStaffCode || input.userCode),
-    }, session);
-
-    const result = await confirmDeliveryCore(input, { session });
-
-    await writeAuditLog({
-      module: 'SalesOrder',
-      action: 'CONFIRM_DELIVERY',
-      referenceId: result.salesOrderId,
-      referenceCode: result.salesOrderCode,
-      userCode: cleanText(input.createdBy || input.deliveryStaffCode || input.userCode),
-      after: result,
-    }, session);
-
-    await completeOperation(operationId, {
-      salesOrderId: result.salesOrderId,
-      deliveryStatus: result.deliveryStatus,
-      returnLineCount: result.returnLineCount,
-    }, session);
-
-    return result;
-  });
-}
-
-async function confirmDeliveryCore(input = {}, options = {}) {
-  const session = options.session;
-  const salesOrderId = cleanText(input.salesOrderId || input.id);
-  const salesOrderCode = cleanText(input.salesOrderCode || input.code);
-  if (!salesOrderId && !salesOrderCode) throw httpError('Thiếu salesOrderId hoặc salesOrderCode', 400);
-
-  const lookupKey = salesOrderId || salesOrderCode;
-  const orderQuery = SalesOrder.findOne(buildOrderLookup(lookupKey));
-  if (session) orderQuery.session(session);
-  const order = await orderQuery.lean();
-  if (!order) throw httpError('Không tìm thấy đơn giao', 404);
-  if (order.status === 'cancelled') throw httpError('Đơn đã hủy, không thể xác nhận giao', 409);
-  if (order.deliveryStatus === 'delivered' || order.status === 'delivered' || order.status === 'accounting_confirmed') {
-    throw httpError('Đơn đã xác nhận giao, không được xác nhận lại', 409);
-  }
-
-  const normalizedLines = normalizeConfirmLines(input.items || input.returnLines || [], order);
-  const returnLines = normalizedLines.filter((line) => Number(line.returnQty || 0) > 0);
-  let returnOrder = null;
-
-  if (returnLines.length) {
-    returnOrder = await returnOrderService.createOrUpdateReturnOrder({
-      salesOrderId: order.id || String(order._id),
-      salesOrderCode: order.code,
-      deliveryDate: input.deliveryDate || order.deliveryDate,
-      items: returnLines,
-      note: input.note || 'Tạo từ app giao hàng',
-      createdBy: cleanText(input.createdBy || input.deliveryStaffCode || order.deliveryStaffCode),
-      operationId: `RETURN_FROM_DELIVERY:${cleanText(order.id || order._id)}`,
-    }, { session });
-  }
-
-  const orderId = cleanText(order.id || order._id);
-  const orderCode = cleanText(order.code);
-  const cashAmount = amountOf(input.cashAmount || 0);
-  const bankAmount = amountOf(input.bankAmount || 0);
-  const bonusAmount = amountOf(input.bonusAmount || 0);
-  const confirmDate = cleanText(input.deliveryDate || order.deliveryDate) || today();
-  const createdBy = cleanText(input.createdBy || input.deliveryStaffCode || order.deliveryStaffCode);
-  const isFailed = input.deliveryStatus === 'failed';
-
-  const updateOrderQuery = SalesOrder.updateOne({ _id: order._id }, {
-    $set: {
-      status: isFailed ? 'assigned' : 'delivered',
-      deliveryStatus: isFailed ? 'failed' : 'delivered',
-      deliveredAt: isFailed ? undefined : new Date(),
-      cashAmount,
-      bankAmount,
-      bonusAmount,
-      paymentDraft: {
-        cashAmount,
-        bankAmount,
-        bonusAmount,
-        note: cleanText(input.note),
-        savedAt: new Date(),
-      },
-    },
-  });
-  if (session) updateOrderQuery.session(session);
-  await updateOrderQuery;
-
-  const fundLedgers = [];
-  const journals = [];
-  if (!isFailed && cashAmount > 0) {
-    const fund = await createFundOnce({
-      type: 'CASH_RECEIPT', method: 'cash', amount: cashAmount, date: confirmDate,
-      customerCode: order.customerCode, customerName: order.customerName,
-      salesOrderId: orderId, salesOrderCode: orderCode,
-      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
-      sourceType: 'cashReceipt', sourceId: orderId, sourceCode: orderCode,
-      note: 'THU TIỀN KHÁCH - app giao hàng', createdBy,
-    }, { session });
-    if (fund) fundLedgers.push(fund);
-    const journal = await createJournalOnce({
-      type: 'RECEIPT', amount: cashAmount, date: confirmDate,
-      customerCode: order.customerCode, customerName: order.customerName,
-      salesOrderId: orderId, salesOrderCode: orderCode,
-      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
-      sourceType: 'cashReceipt', sourceId: orderId, sourceCode: orderCode,
-      note: 'THU TIỀN KHÁCH - tiền mặt', createdBy,
-      lines: [
-        { accountCode: '111', accountName: 'Tiền mặt', debit: cashAmount, credit: 0 },
-        { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: cashAmount },
-      ],
-    }, { session });
-    if (journal) journals.push(journal);
-  }
-  if (!isFailed && bankAmount > 0) {
-    const fund = await createFundOnce({
-      type: 'BANK_RECEIPT', method: 'bank', amount: bankAmount, date: confirmDate,
-      customerCode: order.customerCode, customerName: order.customerName,
-      salesOrderId: orderId, salesOrderCode: orderCode,
-      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
-      sourceType: 'bankReceipt', sourceId: orderId, sourceCode: orderCode,
-      note: 'THU TIỀN KHÁCH - app giao hàng', createdBy,
-    }, { session });
-    if (fund) fundLedgers.push(fund);
-    const journal = await createJournalOnce({
-      type: 'RECEIPT', amount: bankAmount, date: confirmDate,
-      customerCode: order.customerCode, customerName: order.customerName,
-      salesOrderId: orderId, salesOrderCode: orderCode,
-      masterOrderId: order.masterOrderId, masterOrderCode: order.masterOrderCode,
-      sourceType: 'bankReceipt', sourceId: orderId, sourceCode: orderCode,
-      note: 'THU TIỀN KHÁCH - chuyển khoản', createdBy,
-      lines: [
-        { accountCode: '112', accountName: 'Tiền gửi ngân hàng', debit: bankAmount, credit: 0 },
-        { accountCode: 'PTKH', accountName: 'Phải thu khách hàng', debit: 0, credit: bankAmount },
-      ],
-    }, { session });
-    if (journal) journals.push(journal);
-  }
-
-  if (order.masterOrderId || order.masterOrderCode) {
-    const siblingsQuery = SalesOrder.find({
-      status: { $ne: 'cancelled' },
-      $or: [
-        { masterOrderId: order.masterOrderId || '__none__' },
-        { masterOrderCode: order.masterOrderCode || '__none__' },
-      ],
-    }).select('status deliveryStatus');
-    if (session) siblingsQuery.session(session);
-    const siblings = await siblingsQuery.lean();
-
-    const allDelivered = siblings.length > 0 && siblings.every((row) => {
-      if (String(row._id) === String(order._id)) return true;
-      return row.deliveryStatus === 'delivered' || row.status === 'delivered' || row.status === 'accounting_confirmed';
+    const masterStartedAt = Date.now();
+    const masterOrders = await repo.findAssignedMasterOrders({
+      deliveryDate: targetDate,
+      deliveryStaffCode: actorCode,
+      limit: 300
     });
-    if (allDelivered) {
-      const masterFilter = { $or: [] };
-      if (order.masterOrderId) masterFilter.$or.push({ id: order.masterOrderId }, { _id: objectIdOrNull(order.masterOrderId) || undefined });
-      if (order.masterOrderCode) masterFilter.$or.push({ code: order.masterOrderCode });
-      masterFilter.$or = masterFilter.$or.filter((x) => !Object.values(x).includes(undefined));
-      if (masterFilter.$or.length) {
-        const updateMasterQuery = MasterOrder.updateOne(masterFilter, { $set: { status: 'delivered', deliveryStatus: 'delivered', deliveredAt: new Date() } });
-        if (session) updateMasterQuery.session(session);
-        await updateMasterQuery;
+    const masterQueryMs = Date.now() - masterStartedAt;
+
+    const ordersStartedAt = Date.now();
+    const sourceOrders = await repo.findDeliveryOrders({
+      deliveryDate: targetDate,
+      deliveryStaffCode: actorCode,
+      masterOrders,
+      includeCompleted,
+      limit: 300
+    });
+    const orderQueryMs = Date.now() - ordersStartedAt;
+
+    const relatedStartedAt = Date.now();
+    const [returnOrders, arLedgers] = await Promise.all([
+      findReturnOrdersForOrders(sourceOrders),
+      repo.findArLedgersForOrders(sourceOrders)
+    ]);
+    const relatedQueryMs = Date.now() - relatedStartedAt;
+
+    const data = { salesOrders: sourceOrders, masterOrders, returnOrders, arLedgers };
+    const masterMap = masterOrderLookup(masterOrders);
+    const debtByOrder = activeLedgerBalanceByOrder(arLedgers);
+
+    let items = sourceOrders
+      .map((order) => scopedDeliveryRow(order, masterMap, debtByOrder))
+      .filter((order) => order.deliveryDate === targetDate)
+      .filter((order) => order.deliveryStaffCode === actorCode)
+      .map((order) => {
+        const syncedReturn = syncOrderReturnAmountFromReturnOrders(data, order);
+        const lockedReturnOrder = getLockedReturnOrderForSalesOrder(data, order);
+        const row = {
+          ...order,
+          returnAmount: toNumber(syncedReturn.total),
+          returnedAmount: toNumber(syncedReturn.total),
+          returnItems: syncedReturn.returnItems,
+          deliveryReturnItems: syncedReturn.returnItems,
+          items: mergeOrderItemsWithReturnItems(order, syncedReturn.returnItems),
+          returnLocked: Boolean(lockedReturnOrder),
+          returnLockMessage: lockedReturnOrder
+            ? `Phiếu trả hàng đã gộp vào đơn tổng ${lockedReturnOrder.masterReturnOrderCode || lockedReturnOrder.masterReturnOrderId || ''}, không được sửa hàng trả.`
+            : '',
+          returnMergeStatus: lockedReturnOrder ? (lockedReturnOrder.returnMergeStatus || 'merged') : 'unmerged',
+          masterReturnOrderId: lockedReturnOrder ? (lockedReturnOrder.masterReturnOrderId || '') : '',
+          masterReturnOrderCode: lockedReturnOrder ? (lockedReturnOrder.masterReturnOrderCode || '') : '',
+          warehouseReceiveStatus: lockedReturnOrder ? (lockedReturnOrder.warehouseReceiveStatus || '') : ''
+        };
+        row.debtBeforeCollection = deliveryFinance.deliveryDebtBase(row);
+        return deliveryFinance.buildCanonicalDeliveryOrder(row, {
+          returnItems: syncedReturn.returnItems,
+          returnAmountOverride: syncedReturn.total
+        });
+      });
+
+    const deliveryStaffKeyword = normalizeText(
+      query.deliveryStaffCode || query.deliveryStaffName || query.deliveryStaff || query.nvgh || query.deliveryStaffKeyword
+    );
+    const salesStaffKeyword = normalizeText(
+      query.salesStaffCode || query.salesStaffName || query.salesStaff || query.nvbh || query.salesStaffKeyword
+    );
+
+    if (deliveryStaffKeyword) {
+      items = items.filter((order) => [order.deliveryStaffCode, order.deliveryStaffName]
+        .some((value) => normalizeText(value).includes(deliveryStaffKeyword)));
+    }
+    if (salesStaffKeyword) {
+      items = items.filter((order) => [order.salesStaffCode, order.salesStaffName]
+        .some((value) => normalizeText(value).includes(salesStaffKeyword)));
+    }
+    if (q) {
+      items = items.filter((order) => [
+        order.code, order.orderCode, order.salesOrderCode, order.customerCode,
+        order.customerName, order.phone, order.address, order.routeName
+      ].some((value) => normalizeText(value).includes(q)));
+    }
+    if (status) {
+      items = items.filter((order) => {
+        if (status === 'unpaid') return toNumber(order.debtAmount) > 0;
+        if (status === 'late') return order.isLate;
+        return normalizeText(order.deliveryStatus) === status || normalizeText(order.visualStatus) === status;
+      });
+    }
+
+    items = items
+      .sort((a, b) => String(a.routeName).localeCompare(String(b.routeName)) || String(a.createdAt).localeCompare(String(b.createdAt)))
+      .slice(0, 100);
+
+    return {
+      ok: true,
+      date: targetDate,
+      user: { id: mobileUser.id, code: actorCode, name: mobileUser.name || mobileUser.fullName || '' },
+      formula: 'deliveryDate = ngày được chọn + deliveryStaffCode = nhân viên đang đăng nhập',
+      items,
+      perf: {
+        masterQueryMs,
+        orderQueryMs,
+        relatedQueryMs,
+        totalMs: Date.now() - totalStartedAt,
+        sourceOrders: sourceOrders.length,
+        rows: items.length
       }
+    };
+  }
+
+  function mobileDeliveryActorPayload(mobileUser = {}) {
+    const actorCode = String(mobileUser.staffCode || mobileUser.code || '').trim();
+    const actorName = String(mobileUser.fullName || mobileUser.name || '').trim();
+    return {
+      actorDeliveryStaffCode: actorCode,
+      actorStaffCode: actorCode,
+      enforceDeliveryOwnership: true,
+      deliveryStaffCode: actorCode,
+      deliveryStaffName: actorName,
+      staffCode: actorCode,
+      staffName: actorName
+    };
+  }
+
+  function normalizeMobileCollection(body = {}) {
+    const hasSplitAmounts = body.cashAmount !== undefined
+      || body.bankAmount !== undefined
+      || body.rewardAmount !== undefined;
+    const legacyAmount = toNumber(body.collectAmount);
+    const method = String(body.collectionMethod || body.paymentMethod || 'cash').trim().toLowerCase();
+
+    if (hasSplitAmounts) {
+      return {
+        supplied: true,
+        cashAmount: toNumber(body.cashAmount),
+        bankAmount: toNumber(body.bankAmount),
+        rewardAmount: toNumber(body.rewardAmount)
+      };
+    }
+
+    if (body.collectAmount !== undefined) {
+      return {
+        supplied: true,
+        cashAmount: method === 'transfer' ? 0 : legacyAmount,
+        bankAmount: method === 'transfer' ? legacyAmount : 0,
+        rewardAmount: 0
+      };
+    }
+
+    return { supplied: false, cashAmount: 0, bankAmount: 0, rewardAmount: 0 };
+  }
+
+  async function confirmDelivery({ body = {}, mobileUser = {} }) {
+    const orderId = String(body.orderId || body.salesOrderId || body.orderCode || body.salesOrderCode || '').trim();
+    const status = String(body.status || '').trim().toLowerCase();
+    const collection = normalizeMobileCollection(body);
+    const confirmAmountsKey = JSON.stringify({
+      cashAmount: collection.cashAmount,
+      bankAmount: collection.bankAmount,
+      rewardAmount: collection.rewardAmount,
+      debtOrderIds: body.debtOrderIds || []
+    });
+    const idemKey = getIdempotencyKey(body, [
+      'delivery-confirm-canonical',
+      mobileUser && (mobileUser.id || mobileUser.code),
+      orderId,
+      status,
+      confirmAmountsKey
+    ]);
+    const cachedResult = readIdempotentResult(idemKey);
+    if (cachedResult) return cachedResult;
+
+    if (!orderId) {
+      return { statusCode: 400, body: { ok: false, message: 'Thiếu mã đơn giao hàng' } };
+    }
+    if (!['success', 'failed'].includes(status)) {
+      return { statusCode: 400, body: { ok: false, message: 'Trạng thái giao hàng không hợp lệ' } };
+    }
+    if ([collection.cashAmount, collection.bankAmount, collection.rewardAmount].some((value) => value < 0)) {
+      return { statusCode: 400, body: { ok: false, message: 'Tiền thu không được âm' } };
+    }
+
+    const engine = new DeliveryEngine({ SalesOrder, MasterOrder, ReturnOrder, StockTransaction, ArLedger, User });
+    const actor = mobileDeliveryActorPayload(mobileUser);
+    const perf = createStepTimer('delivery.confirm.canonical');
+
+    try {
+      const result = await withMongoTransaction(async (session) => {
+        perf('start');
+        const persistentRequest = await beginRequest({
+          scope: 'mobile.delivery.confirm',
+          actorCode: actor.actorDeliveryStaffCode,
+          requestKey: idemKey
+        }, { session });
+        if (persistentRequest.replay) return persistentRequest.response;
+        perf('idempotency_begin');
+        const current = await engine.getCanonicalOrderByKey(orderId, { session });
+        perf('load_order');
+        if (!current) {
+          const err = new Error('Không tìm thấy đơn giao hàng');
+          err.status = 404;
+          throw err;
+        }
+
+        let paymentResult = null;
+        let returnResult = null;
+
+        if (status === 'success' && collection.supplied) {
+          paymentResult = await engine.savePayment({
+            ...body,
+            ...actor,
+            orderId,
+            salesOrderId: current.salesOrderId,
+            cashAmount: collection.cashAmount,
+            bankAmount: collection.bankAmount,
+            rewardAmount: collection.rewardAmount,
+            date: body.date || dateUtil.todayVN()
+          }, { session });
+          perf('save_payment');
+        }
+
+        if (status === 'failed') {
+          const fullItems = buildReturnItemsFromRequest(current, [], 'full');
+          returnResult = await engine.saveReturn({
+            ...body,
+            ...actor,
+            orderId,
+            salesOrderId: current.salesOrderId,
+            salesOrderCode: current.salesOrderCode,
+            returnType: 'full',
+            items: fullItems,
+            note: String(body.note || `Không giao được - trả toàn bộ đơn ${current.salesOrderCode || current.orderCode || orderId}`).trim(),
+            source: 'mobile_delivery_canonical'
+          }, { session });
+          perf('save_full_return');
+        }
+
+        const confirmed = await engine.confirm({
+          ...body,
+          ...actor,
+          orderId,
+          salesOrderId: current.salesOrderId,
+          deliveryStatus: status === 'success' ? 'delivered' : 'failed',
+          status: status === 'success' ? 'delivered' : 'failed'
+        }, { session });
+        perf('confirm_order');
+
+        await writeMobileLogDirect(mobileUser, 'mobile_confirm_delivery', {
+          refType: 'salesOrder',
+          refId: current.salesOrderId || current.orderId || orderId,
+          refCode: current.salesOrderCode || current.orderCode || orderId,
+          detail: {
+            status,
+            cashAmount: collection.cashAmount,
+            bankAmount: collection.bankAmount,
+            rewardAmount: collection.rewardAmount
+          },
+          note: `${status === 'success' ? 'Giao thành công' : 'Giao thất bại'} ${current.salesOrderCode || current.orderCode || orderId}`
+        }, { session });
+        perf('write_log');
+
+        const response = {
+          statusCode: 200,
+          body: {
+            ok: true,
+            success: true,
+            source: 'delivery-engine',
+            message: 'Đã cập nhật trạng thái giao hàng',
+            order: confirmed.order,
+            allocation: paymentResult && paymentResult.allocation,
+            returnOrder: returnResult && returnResult.returnOrder
+          }
+        };
+        await completeRequest(persistentRequest.key, response, { session });
+        perf('idempotency_complete');
+        return response;
+      });
+
+      perf('done');
+      return rememberIdempotentResult(idemKey, result);
+    } catch (err) {
+      const response = {
+        statusCode: Number(err && err.status) || 500,
+        body: {
+          ok: false,
+          success: false,
+          code: err && err.code,
+          message: (err && err.message) || 'Không cập nhật được giao hàng mobile'
+        }
+      };
+      return rememberIdempotentResult(idemKey, response);
     }
   }
 
+  async function createReturnFromDelivery({ body = {}, mobileUser }) {
+    const orderIdForKey = String(body.orderId || body.salesOrderId || body.orderCode || body.salesOrderCode || '').trim();
+    const returnItemsKey = JSON.stringify((Array.isArray(body.items) ? body.items : []).map((item) => ({
+      productCode: item.productCode || item.code || item.productId || '',
+      returnQty: item.returnQty ?? item.qtyReturn ?? item.returnQuantity ?? item.quantity ?? item.qty ?? 0
+    })));
+    const idemKey = getIdempotencyKey(body, ['delivery-return-canonical', mobileUser && (mobileUser.id || mobileUser.code), orderIdForKey, body.returnType, returnItemsKey]);
+    const cachedResult = readIdempotentResult(idemKey);
+    if (cachedResult) return cachedResult;
+
+    const engine = new DeliveryEngine({ SalesOrder, MasterOrder, ReturnOrder, StockTransaction, ArLedger, User });
+    const actor = mobileDeliveryActorPayload(mobileUser || {});
+    try {
+      const result = await withMongoTransaction((session) => engine.saveReturn({
+        ...body,
+        ...actor,
+        orderId: body.orderId || body.salesOrderId || body.orderCode || body.salesOrderCode,
+        salesOrderId: body.salesOrderId || body.orderId,
+        salesOrderCode: body.salesOrderCode || body.orderCode,
+        source: 'mobile_delivery_canonical'
+      }, { session }));
+      const response = {
+        statusCode: 200,
+        body: {
+          ok: true,
+          source: 'returnOrders',
+          message: result.message || 'Đã lưu hàng trả vào returnOrders',
+          returnOrder: result.returnOrder || null,
+          returns: result.returns || result.returnOrders || result.rows || [],
+          returnOrders: result.returnOrders || result.returns || result.rows || [],
+          rows: result.rows || result.returns || result.returnOrders || [],
+          order: result.order || null
+        }
+      };
+      return rememberIdempotentResult(idemKey, response);
+    } catch (err) {
+      const response = { statusCode: err.status || 500, body: { ok: false, message: err.message || 'Không tạo được phiếu trả hàng từ app giao hàng' } };
+      return rememberIdempotentResult(idemKey, response);
+    }
+  }
+
+
+  async function listDeliveryReturns({ query = {}, mobileUser = {} }) {
+    const engine = new DeliveryEngine({ SalesOrder, MasterOrder, ReturnOrder, StockTransaction, ArLedger, User });
+    const actorCode = String(mobileUser.staffCode || mobileUser.code || '').trim();
+    const scopedQuery = { ...(query || {}), deliveryStaffCode: actorCode };
+    const result = await engine.listReturns(scopedQuery);
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        source: 'returnOrders',
+        returns: result.rows || [],
+        returnOrders: result.rows || [],
+        rows: result.rows || [],
+        total: (result.rows || []).length,
+        summary: result.summary || {}
+      }
+    };
+  }
+
+  async function submitDeliveryPayment(args = {}) {
+    const body = { ...(args.body || {}), status: (args.body && args.body.status) || 'success' };
+    return confirmDelivery({ ...args, body });
+  }
+
+  async function submitCash({ body = {}, mobileUser } = {}) {
+    const deliveryStaffCode = mobileUser?.staffCode || mobileUser?.code || body.deliveryStaffCode || body.staffCode;
+    const deliveryStaffName = mobileUser?.fullName || mobileUser?.name || body.deliveryStaffName || body.staffName;
+    const result = await DeliverySettlementService.submitCashToFund(
+      body.id || body.code || body.submissionId || body.submissionCode,
+      {
+        ...body,
+        deliveryStaffCode,
+        deliveryStaffName,
+        staffCode: deliveryStaffCode,
+        staffName: deliveryStaffName,
+        deliveryDate: body.deliveryDate || body.date || dateUtil.todayVN(),
+        submittedCashAmount: body.submittedCashAmount ?? body.amount ?? body.cashAmount,
+        confirmedBy: mobileUser?.code || mobileUser?.name || body.confirmedBy
+      }
+    );
+
+    return {
+      statusCode: result.error ? (result.status || 400) : 200,
+      body: {
+        ok: !result.error,
+        success: !result.error,
+        message: result.error || result.message || 'Đã nộp quỹ',
+        ...result
+      }
+    };
+  }
+
   return {
-    ok: true,
-    salesOrderId: order.id || String(order._id),
-    salesOrderCode: order.code,
-    status: isFailed ? 'assigned' : 'delivered',
-    deliveryStatus: isFailed ? 'failed' : 'delivered',
-    returnLineCount: returnLines.length,
-    returnOrder,
-    fundLedgers,
-    journals,
-    accountingStatus: order.accountingStatus || 'pending',
+    listDeliveryOrders,
+    listDeliveryReturns,
+    confirmDelivery,
+    createReturnFromDelivery,
+    submitDeliveryPayment,
+    submitCash
   };
 }
 
-module.exports = {
-  listDeliveryOrders,
-  getDeliveryOrderDetail,
-  confirmDelivery,
-};
+module.exports = { createMobileDeliveryService };

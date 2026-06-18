@@ -1,25 +1,40 @@
-const mongoose = require('mongoose');
-const { createBaseSchema } = require('../core/baseSchema');
+const flexModel = require('./_flexModel');
 
-const schema = createBaseSchema({
-  code: { type: String, required: true },
-  type: { type: String, enum: ['CASH_RECEIPT', 'BANK_RECEIPT', 'CASH_PAYMENT', 'BANK_DEPOSIT', 'BONUS_PAYMENT'], required: true },
-  method: { type: String, enum: ['cash', 'bank', 'other'], default: 'cash' },
-  amount: { type: Number, required: true, default: 0 },
-  date: { type: String, required: true },
-  customerCode: { type: String, default: '' },
-  customerName: { type: String, default: '' },
-  salesOrderId: { type: String, default: '' },
-  salesOrderCode: { type: String, default: '' },
-  masterOrderId: { type: String, default: '' },
-  masterOrderCode: { type: String, default: '' },
-  note: { type: String, default: '' },
-  sourceType: { type: String, default: '' },
-  sourceId: { type: String, default: '' },
+const FundLedger = flexModel('FundLedger', 'fundLedgers', {
+  id: String,
+  code: String,
+  date: String,
+  fundType: String, // cash | bank
+  direction: String, // in | out
+  account: String, // CASH | BANK or accounting sub-account
+  idempotencyKey: String,
+  amount: Number,
+  sourceType: String,
+  sourceId: String,
+  sourceCode: String,
+  refType: String,
+  refId: String,
+  refCode: String,
+  referenceType: String,
+  referenceId: String,
+  referenceCode: String,
+  deliveryDate: String,
+  deliveryStaffCode: String,
+  deliveryStaffName: String,
+  customerCode: String,
+  customerName: String,
+  staffCode: String,
+  staffName: String,
+  note: String,
+  status: String,
+  createdBy: String,
+  createdAt: String,
+  updatedAt: String
 });
 
-schema.index({ date: 1, type: 1 }, { name: 'idx_fund_date_type' });
-schema.index({ masterOrderId: 1 }, { name: 'idx_fund_master_order_id' });
-schema.index({ sourceType: 1, sourceId: 1, type: 1 }, { name: 'idx_fund_source_unique', unique: true, partialFilterExpression: { sourceType: { $type: 'string' }, sourceId: { $type: 'string' }, type: { $type: 'string' } } });
+FundLedger.schema.index(
+  { idempotencyKey: 1 },
+  { unique: true, sparse: true, name: 'uniq_fund_ledger_idempotency_key' }
+);
 
-module.exports = mongoose.models.FundLedger || mongoose.model('FundLedger', schema, 'fundLedgers');
+module.exports = FundLedger;

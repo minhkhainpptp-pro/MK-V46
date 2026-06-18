@@ -1,31 +1,18 @@
-const service = require('../../engines/DeliveryEngine');
-const { successResponse } = require('../../utils/response.util');
+'use strict';
 
-async function listOrders(req, res, next) {
-  const started = Date.now();
-  try {
-    const result = await service.listOrders(req.query);
-    return successResponse(res, result.rows, {
-      rows: result.rows,
-      orders: result.rows,
-      total: result.total,
-      ms: Date.now() - started,
-      perf: result.perf || { totalMs: Date.now() - started },
-    });
-  } catch (err) { next(err); }
+const { createMobileDeliveryService } = require('../../services/mobile/delivery.service');
+const { wrapMobile } = require('./_mobileResponse');
+
+function createMobileDeliveryController(ctx) {
+  const service = createMobileDeliveryService(ctx);
+  return {
+    listOrders: wrapMobile(service, 'listDeliveryOrders', 500, 'Không tải được đơn giao hàng mobile'),
+    listReturns: wrapMobile(service, 'listDeliveryReturns', 500, 'Không tải được hàng trả mobile'),
+    confirm: wrapMobile(service, 'confirmDelivery', 500, 'Không cập nhật được giao hàng mobile'),
+    createReturn: wrapMobile(service, 'createReturnFromDelivery', 400, 'Không tạo được phiếu trả hàng từ app giao hàng'),
+    submitPayment: wrapMobile(service, 'submitDeliveryPayment', 500, 'Không lưu được tiền thu app giao hàng'),
+    submitCash: wrapMobile(service, 'submitCash', 500, 'Không ghi nhận được nộp quỹ mobile')
+  };
 }
 
-async function getOrder(req, res, next) {
-  try {
-    return successResponse(res, await service.getOrderDetail(req.params.id));
-  } catch (err) { next(err); }
-}
-
-async function confirm(req, res, next) {
-  try {
-    const result = await service.confirm(req.body);
-    return successResponse(res, result, result);
-  } catch (err) { next(err); }
-}
-
-module.exports = { listOrders, getOrder, confirm };
+module.exports = { createMobileDeliveryController };

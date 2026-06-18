@@ -1,0 +1,1460 @@
+
+const v45Common = window.V45Common || {};
+const todayValue = v45Common.todayValue;
+const calculateCartonUnit = v45Common.calculateCartonUnit;
+import { mobileApi, getUser } from './api.js';
+import { bindLogout, debounce, escapeHtml, money, requireLogin, requireRole, setMessage } from './ui.js';
+
+requireLogin();
+requireRole(['sales']);
+bindLogout(document.getElementById('logoutBtn'));
+
+const user = getUser();
+document.getElementById('staffInfo').textContent = `${user.name || user.username || 'Nhân viên'} · ${user.role || 'sales'}`;
+
+
+function setButtonBusy(button, busy, busyText = 'Đang lưu...') {
+  if (!button) return;
+  if (busy) {
+    button.dataset.originalText = button.dataset.originalText || button.textContent || '';
+    button.disabled = true;
+    button.textContent = busyText;
+  } else {
+    button.disabled = false;
+    if (button.dataset.originalText) button.textContent = button.dataset.originalText;
+    delete button.dataset.originalText;
+  }
+}
+
+let selectedCustomer = null;
+let selectedProduct = null;
+let cart = [];
+let editingOrderId = '';
+let lastCustomers = [];
+let customerCatalog = [];
+let todayOrderCache = [];
+let debtCache = [];
+let debtLoaded = false;
+let debtLoading = false;
+let debtRequestSeq = 0;
+let debtSubtab = 'customers';
+let selectedDebtCustomerKey = '';
+let debtFormDirty = false;
+let debtListScrollTop = 0;
+
+const tabs = document.querySelectorAll('.tab-btn');
+const panels = document.querySelectorAll('.tab-panel');
+const customerSearch = document.getElementById('customerSearch');
+const customerList = document.getElementById('customerList');
+const productSearch = document.getElementById('productSearch');
+// MOBILE_PRODUCT_GROUP_FILTER_LOGIC_START: DOM filter Nhóm hàng để thu hẹp danh sách sản phẩm mobile.
+const productGroupFilter = document.getElementById('productGroupFilter');
+let productGroupOptionsLoaded = false;
+// MOBILE_PRODUCT_GROUP_FILTER_LOGIC_END
+const productSuggestions = document.getElementById('productSuggestions');
+const selectedCustomerBox = document.getElementById('selectedCustomer');
+const selectedProductBox = document.getElementById('selectedProduct');
+const caseQtyInput = document.getElementById('caseQtyInput');
+const looseQtyInput = document.getElementById('looseQtyInput');
+const paidAmountInput = document.getElementById('paidAmountInput');
+const cartList = document.getElementById('cartList');
+const cartCount = document.getElementById('cartCount');
+const cartTotal = document.getElementById('cartTotal');
+const todayOrders = document.getElementById('todayOrders');
+const message = document.getElementById('salesMessage');
+const orderFormTitle = document.getElementById('orderFormTitle');
+const submitOrderBtn = document.getElementById('submitOrderBtn');
+const cartTabBadge = document.getElementById('cartTabBadge');
+const debtList = document.getElementById('debtList');
+const debtLedgerList = document.getElementById('debtLedgerList');
+const debtTotalAmount = document.getElementById('debtTotalAmount');
+const debtCustomerCount = document.getElementById('debtCustomerCount');
+const debtPendingAmount = document.getElementById('debtPendingAmount');
+const debtTabMessage = document.getElementById('debtTabMessage');
+const debtCustomersSubtab = document.getElementById('debtCustomersSubtab');
+const debtCollectSubtab = document.getElementById('debtCollectSubtab');
+const debtCustomersPanel = document.getElementById('debtCustomersPanel');
+const debtCollectPanel = document.getElementById('debtCollectPanel');
+const debtCustomerSearch = document.getElementById('debtCustomerSearch');
+const debtCustomerSort = document.getElementById('debtCustomerSort');
+
+function switchTab(tabId) {
+  tabs.forEach((btn) => btn.classList.toggle('active', btn.dataset.tab === tabId));
+  panels.forEach((panel) => panel.classList.toggle('active', panel.id === tabId));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function formatShortDate(value) {
+  const raw = String(value || todayValue()).trim();
+  let m = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+  m = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4}|\d{2})/);
+  if (m) { let d=Number(m[1]), mo=Number(m[2]), y=Number(m[3]); if(y<100)y+=y>=70?1900:2000; if(mo>=1&&mo<=12&&d>=1&&d<=31)return `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`; }
+  return raw.slice(0,10);
+}
+
+function formatDisplayDate(value) {
+  const normalized = formatShortDate(value);
+  const m = String(normalized || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}` : (normalized || '-');
+}
+
+function customerDebtValue(customer = {}) {
+  return Number(customer.debtAmount ?? customer.currentDebt ?? customer.debt ?? customer.arDebt ?? 0);
+}
+
+
+function customerAvailableDebtValue(customer = {}) {
+  return Number(customer.availableDebtAmount ?? customer.availableDebt ?? customer.debtAmount ?? customer.debt ?? 0);
+}
+
+function customerPendingCollectedValue(customer = {}) {
+  return Number(customer.pendingCollectedAmount ?? customer.pendingCollected ?? 0);
+}
+
+function parseMobileMoneyInput(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return 0;
+  const multiplier = raw.endsWith('k') ? 1000 : (raw.endsWith('tr') ? 1000000 : 1);
+  const cleaned = raw.replace(/tr|k/g, '').replace(/[^0-9,.-]/g, '').replace(/[.,](?=\d{3}(\D|$))/g, '').replace(',', '.');
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n * multiplier)) : 0;
+}
+
+function customerSalesValue(customer = {}) {
+  return Number(customer.monthRevenue ?? customer.monthSales ?? customer.salesAmount ?? 0);
+}
+
+
+// MOBILE_SALES_CLIENT_OWNER_GUARD_START
+function normalizeSalesStaffToken(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function currentSalesStaffCode() {
+  return String(
+    user.salesStaffCode ||
+    user.salesmanCode ||
+    user.nvbhCode ||
+    user.maNVBH ||
+    user.staffCode ||
+    user.code ||
+    ''
+  ).trim();
+}
+
+function orderSalesStaffCode(order = {}) {
+  return String(
+    order.salesStaffCode ||
+    order.salesPersonCode ||
+    order.salesmanCode ||
+    order.nvbhCode ||
+    order.maNVBH ||
+    (order.salesStaff && order.salesStaff.code) ||
+    ''
+  ).trim();
+}
+
+function filterOrdersForCurrentSalesUser(items = []) {
+  const rows = Array.isArray(items) ? items : [];
+  if (String(user.role || '') !== 'sales') return rows;
+  const code = normalizeSalesStaffToken(currentSalesStaffCode());
+  if (!code) return [];
+  return rows.filter((order) => normalizeSalesStaffToken(orderSalesStaffCode(order)) === code);
+}
+// MOBILE_SALES_CLIENT_OWNER_GUARD_END
+
+
+function cleanCustomerText(value, fallback = '') {
+  const text = String(value ?? '').trim();
+  return text && text !== 'undefined' && text !== 'null' ? text : fallback;
+}
+
+function customerCodeValue(customer = {}) {
+  return cleanCustomerText(customer.code || customer.customerCode || customer.customerId || customer.id || '');
+}
+
+function customerNameValue(customer = {}) {
+  return cleanCustomerText(customer.name || customer.customerName || customer.fullName || '');
+}
+
+function customerPhoneValue(customer = {}) {
+  return cleanCustomerText(customer.phone || customer.customerPhone || customer.mobile || customer.tel || customer.telephone || customer.contactPhone || customer.sdt || '', 'Chưa có SĐT');
+}
+
+function customerAddressValue(customer = {}) {
+  return cleanCustomerText(customer.address || customer.customerAddress || customer.fullAddress || customer.diaChi || customer.routeAddress || '', 'Chưa có địa chỉ');
+}
+
+// MOBILE_SALES_CUSTOMER_CANONICAL_PAYLOAD_START
+function normalizeSelectedCustomerForSubmit(customer = {}) {
+  const code = customerCodeValue(customer);
+  const name = customerNameValue(customer);
+  const id = cleanCustomerText(customer.id || customer._id || customer.customerId || '');
+  const phone = cleanCustomerText(customer.phone || customer.customerPhone || customer.mobile || customer.tel || customer.telephone || customer.contactPhone || customer.sdt || '');
+  const address = cleanCustomerText(customer.address || customer.customerAddress || customer.fullAddress || customer.diaChi || customer.routeAddress || '');
+
+  return {
+    ...customer,
+    id,
+    customerId: cleanCustomerText(customer.customerId || id || code),
+    code,
+    customerCode: code,
+    name,
+    customerName: name,
+    phone,
+    customerPhone: phone,
+    address,
+    customerAddress: address
+  };
+}
+// MOBILE_SALES_CUSTOMER_CANONICAL_PAYLOAD_END
+
+function debtClassName(customer = {}) {
+  const debt = customerDebtValue(customer);
+  if (debt > 10000000) return 'debt-high';
+  if (debt >= 3000000) return 'debt-mid';
+  if (debt > 0) return 'debt-low';
+  return 'debt-zero';
+}
+
+function customerKeys(customer = {}) {
+  return [
+    customer.id,
+    customer._id,
+    customer.customerId,
+    customer.code,
+    customer.customerCode,
+    customer.name,
+    customer.customerName
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+}
+
+function buildDebtLookup(rows = debtCache) {
+  const map = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((item) => {
+    customerKeys(item).forEach((key) => map.set(key, item));
+  });
+  return map;
+}
+
+function mergeCustomerDebt(customer = {}, debtLookup = buildDebtLookup()) {
+  const matched = customerKeys(customer).map((key) => debtLookup.get(key)).find(Boolean);
+  if (!matched) return { ...customer, debtAmount: customerDebtValue(customer) };
+  return {
+    ...customer,
+    debtAmount: Number(matched.debtAmount || 0),
+    orderCount: Number(matched.orderCount || 0),
+    oldestDebtDate: matched.oldestDebtDate || customer.oldestDebtDate || ''
+  };
+}
+
+tabs.forEach((btn) => btn.addEventListener('click', () => {
+  switchTab(btn.dataset.tab);
+  if (btn.dataset.tab === 'debtTab') loadDebts({ force: true });
+}));
+customerSearch.addEventListener('input', debounce(() => loadCustomers(customerSearch.value.trim()), 250));
+document.getElementById('reloadCustomersBtn')?.addEventListener('click', async () => { await preloadCustomers(true); await loadDebts({ silent: true }); loadCustomers(customerSearch.value.trim()); });
+document.getElementById('reloadOrdersBtn')?.addEventListener('click', loadTodayOrders);
+
+todayOrders?.addEventListener('click', async (event) => {
+  const editButton = event.target.closest('[data-edit-order]');
+  if (editButton && todayOrders.contains(editButton)) {
+    setButtonBusy(editButton, true, 'Đang mở...');
+    try {
+      await editTodayOrder(editButton.dataset.editOrder);
+    } finally {
+      setButtonBusy(editButton, false);
+    }
+    return;
+  }
+
+  const deleteButton = event.target.closest('[data-delete-order]');
+  if (deleteButton && todayOrders.contains(deleteButton)) {
+    setButtonBusy(deleteButton, true, 'Đang xóa...');
+    try {
+      await deleteTodayOrder(deleteButton.dataset.deleteOrder, deleteButton.dataset.orderCode);
+    } finally {
+      setButtonBusy(deleteButton, false);
+    }
+  }
+});
+document.getElementById('reloadDebtsBtn')?.addEventListener('click', () => {
+  if (debtFormDirty && !window.confirm('Bạn đang có phiếu thu chưa gửi. Tải lại sẽ xóa dữ liệu đang nhập.')) return;
+  debtFormDirty = false;
+  loadDebts({ force: true });
+});
+debtCustomersSubtab?.addEventListener('click', () => setDebtSubtab('customers'));
+debtCollectSubtab?.addEventListener('click', () => setDebtSubtab('collect'));
+debtCustomerSearch?.addEventListener('input', () => renderDebtCustomerList(debtCache));
+debtCustomerSort?.addEventListener('change', () => renderDebtCustomerList(debtCache));
+document.getElementById('clearOrderBtn')?.addEventListener('click', clearOrderForm);
+
+initSalesApp();
+
+async function initSalesApp() {
+  renderDebtLedger();
+  setDebtSubtab('customers', { restoreScroll: false });
+  await loadDebts({ silent: true });
+  await loadCustomers('');
+  loadTodayOrders();
+  initProductAutocomplete();
+  renderCart();
+}
+
+async function preloadCustomers(force = false) {
+  // Phase 3.6: không preload toàn bộ khách hàng. Chỉ giữ hàm này để nút Tải lại xóa cache.
+  customerCatalog = [];
+  if (force && window.CatalogCache) window.CatalogCache.invalidate('customers');
+  return customerCatalog;
+}
+
+async function filterCustomers(keyword = '') {
+  // App bán hàng phải dùng API mobile/customers để dữ liệu đã được gắn công nợ từ ArLedger
+  // và được sắp xếp theo công nợ giảm dần. Không dùng UnifiedSearchEngine/CatalogCache tại đây
+  // vì cache có thể không có debtAmount chuẩn.
+  const data = await mobileApi.getCustomers(keyword, { limit: 300 });
+  return data.items || data.customers || [];
+}
+
+async function loadCustomers(q = '') {
+  try {
+    customerList.className = 'customer-list empty';
+    customerList.textContent = q ? 'Đang tìm khách hàng...' : 'Nhập từ khóa để tìm khách hàng...';
+    lastCustomers = await filterCustomers(q);
+    renderCustomerList(lastCustomers);
+  } catch (err) {
+    customerList.className = 'customer-list empty';
+    customerList.textContent = err.message;
+  }
+}
+
+function renderCustomerList(items) {
+  const debtLookup = buildDebtLookup();
+  const sortedItems = (Array.isArray(items) ? items : [])
+    .map((customer) => mergeCustomerDebt(customer, debtLookup))
+    .sort((a, b) => customerDebtValue(b) - customerDebtValue(a));
+  lastCustomers = sortedItems;
+
+  if (!sortedItems.length) {
+    customerList.className = 'customer-list empty';
+    customerList.textContent = 'Không có khách hàng phù hợp';
+    return;
+  }
+
+  customerList.className = 'customer-list';
+  customerList.innerHTML = sortedItems.map((customer, index) => {
+    const code = customerCodeValue(customer);
+    const name = customerNameValue(customer);
+    const debt = customerDebtValue(customer);
+    const phone = customerPhoneValue(customer);
+    const address = customerAddressValue(customer);
+    return `
+      <button class="customer-card ${debtClassName(customer)}" data-customer-index="${index}">
+        <strong>${escapeHtml(code || '')}${code && name ? ' - ' : ''}${escapeHtml(name || '')}</strong>
+        <span class="customer-contact">SĐT: ${escapeHtml(phone)}</span>
+        <span class="customer-contact">ĐC: ${escapeHtml(address)}</span>
+        <div class="customer-metrics">
+          <em class="metric-debt">Nợ: ${money(debt)}</em>
+          <em>DS tháng: ${money(customerSalesValue(customer))}</em>
+        </div>
+      </button>
+    `;
+  }).join('');
+
+  customerList.querySelectorAll('[data-customer-index]').forEach((btn) => {
+    btn.addEventListener('click', () => selectCustomer(lastCustomers[Number(btn.dataset.customerIndex)]));
+  });
+}
+
+function selectCustomer(customer) {
+  const mergedCustomer = normalizeSelectedCustomerForSubmit(mergeCustomerDebt(customer));
+  selectedCustomer = mergedCustomer;
+  const code = customerCodeValue(mergedCustomer);
+  const name = customerNameValue(mergedCustomer);
+  selectedCustomerBox.innerHTML = `
+    <strong>${escapeHtml(code || '')}${code && name ? ' - ' : ''}${escapeHtml(name || '')}</strong><br />
+    <span>SĐT: ${escapeHtml(customerPhoneValue(mergedCustomer))}</span><br />
+    <span>ĐC: ${escapeHtml(customerAddressValue(mergedCustomer))}</span><br />
+    <span>Nợ: ${money(customerDebtValue(mergedCustomer))} · DS tháng: ${money(customerSalesValue(mergedCustomer))}</span>
+  `;
+  selectedCustomerBox.classList.remove('muted');
+  setMessage(message, 'Đã chọn khách hàng. Hãy thêm sản phẩm vào giỏ.', 'success');
+  switchTab('orderTab');
+  setTimeout(() => productSearch.focus(), 200);
+}
+
+
+function normalizePackingRate(source = {}) {
+  const rate = Number(
+    source.conversionRate ??
+    source.unitsPerCase ??
+    source.packingQty ??
+    source.packQty ??
+    source.pack ??
+    source.packageQty ??
+    1
+  );
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
+}
+
+function attachPackingRate(target = {}, source = {}) {
+  const conversionRate = normalizePackingRate(source);
+  target.conversionRate = conversionRate;
+  target.packingQty = conversionRate;
+  target.unitsPerCase = conversionRate;
+  return target;
+}
+
+function formatStockTL(qty, rate){ return calculateCartonUnit(qty, rate).display; }
+function quantityDisplayTL(item = {}) {
+  const rate = normalizePackingRate(item);
+  return formatStockTL(Number(item.quantity || item.qty || 0), rate);
+}
+
+// MOBILE_SALES_CART_PROMOTION_RECALC_START
+function buildPromotionCartPayloadItem(item = {}) {
+  return {
+    productId: item.productId || item.id || item.productCode,
+    productCode: item.productCode || item.code,
+    productName: item.productName || item.name,
+    quantity: Number(item.quantity || 0),
+    conversionRate: normalizePackingRate(item),
+    grossPrice: Number(item.grossPrice || item.originalPrice || item.catalogSalePrice || item.salePrice || item.price || 0),
+    salePrice: Number(item.grossPrice || item.originalPrice || item.catalogSalePrice || item.salePrice || item.price || 0),
+    price: Number(item.grossPrice || item.originalPrice || item.catalogSalePrice || item.salePrice || item.price || 0)
+  };
+}
+
+async function recalculateCartPromotions(options = {}) {
+  if (!cart.length) return;
+  const silent = !!options.silent;
+  try {
+    const data = await mobileApi.calculatePromotions({
+      date: todayValue(),
+      saleDate: todayValue(),
+      items: cart.map(buildPromotionCartPayloadItem)
+    });
+    const lines = Array.isArray(data?.result?.lines) ? data.result.lines : [];
+    const byCode = new Map(lines.map((line) => [String(line.productCode || line.code || '').trim(), line]));
+
+    cart = cart.map((item) => {
+      const code = String(item.productCode || item.code || '').trim();
+      const line = byCode.get(code) || {};
+      const quantity = Number(item.quantity || 0);
+      const grossPrice = Number(line.catalogSalePrice || item.grossPrice || item.originalPrice || item.catalogSalePrice || item.salePrice || item.price || 0);
+      const grossAmount = Math.round(quantity * grossPrice);
+      const directDiscountAmount = Number(line.directDiscountAmount || 0);
+      const groupDiscountAmount = Number(line.groupDiscountAmount || 0);
+      const discountAmount = Math.min(grossAmount, Math.max(0, directDiscountAmount + groupDiscountAmount));
+      const amount = Math.max(0, grossAmount - discountAmount);
+      const finalPrice = quantity > 0 ? Math.round(amount / quantity) : grossPrice;
+      const promotionRows = Array.isArray(line.promotionRows) ? line.promotionRows : [];
+      const firstPromotion = promotionRows[0] || line.directPromotionRule || {};
+
+      return attachPackingRate({
+        ...item,
+        originalPrice: grossPrice,
+        grossPrice,
+        catalogSalePrice: grossPrice,
+        grossAmount,
+        directDiscountPercent: Number(line.directDiscountPercent || 0),
+        groupDiscountPercent: Number(line.groupDiscountPercent || 0),
+        discountPercent: grossAmount > 0 ? (discountAmount / grossAmount) * 100 : 0,
+        directDiscountAmount,
+        groupDiscountAmount,
+        discountAmount,
+        promotionAmount: discountAmount,
+        totalDiscountAmount: discountAmount,
+        finalPrice,
+        unitPrice: finalPrice,
+        salePrice: finalPrice,
+        price: finalPrice,
+        amount,
+        netAmount: amount,
+        saleMethod: 'promotion',
+        saleMode: 'promotion',
+        pricingMode: 'promotion',
+        priceLocked: true,
+        lockedPrice: true,
+        lockedPromotion: true,
+        promotionCalculated: true,
+        promotionCode: line.promotionCode || firstPromotion.promotionCode || firstPromotion.code || firstPromotion.programCode || '',
+        promotionName: line.promotionName || firstPromotion.description || firstPromotion.programName || firstPromotion.name || '',
+        promotionRows
+      }, item);
+    });
+  } catch (err) {
+    if (!silent) setMessage(message, err.message || 'Không tính được khuyến mại cho giỏ hàng', 'error');
+    // Fallback an toàn: vẫn tính theo giá gốc để app không bị treo, backend sẽ tính lại khi lưu đơn.
+    cart = cart.map((item) => {
+      const quantity = Number(item.quantity || 0);
+      const grossPrice = Number(item.grossPrice || item.originalPrice || item.catalogSalePrice || item.salePrice || item.price || 0);
+      return {
+        ...item,
+        originalPrice: grossPrice,
+        grossPrice,
+        catalogSalePrice: grossPrice,
+        unitPrice: grossPrice,
+        salePrice: grossPrice,
+        price: grossPrice,
+        discountAmount: 0,
+        promotionAmount: 0,
+        totalDiscountAmount: 0,
+        amount: Math.round(quantity * grossPrice),
+        saleMethod: 'promotion',
+        saleMode: 'promotion',
+        pricingMode: 'promotion',
+        priceLocked: true
+      };
+    });
+  }
+}
+// MOBILE_SALES_CART_PROMOTION_RECALC_END
+
+function toMobileProduct(product = {}) {
+  const availableQty = Number(
+    product._availableQty ??
+    product.availableQty ??
+    product.availableStock ??
+    product.stockQuantity ??
+    product.stock ??
+    0
+  );
+
+  const code = product.code || product.productCode || product.sku || '';
+  const name = product.name || product.productName || '';
+  // MOBILE_PRODUCT_GROUP_FILTER_NORMALIZE_START: chuẩn hóa Nhóm hàng từ danh mục sản phẩm.
+  const groupName = String(
+    product.groupName ||
+    product.productGroupName ||
+    product.productGroup ||
+    product.group ||
+    product.categoryName ||
+    product.category ||
+    ''
+  ).trim();
+  // MOBILE_PRODUCT_GROUP_FILTER_NORMALIZE_END
+
+  const internalSaleQuota = product.internalSaleQuota && typeof product.internalSaleQuota === 'object'
+    ? product.internalSaleQuota
+    : {};
+  const maxOrderQty = Math.max(0, Number(
+    product.maxOrderQty ??
+    internalSaleQuota.currentlyAllowedQty ??
+    internalSaleQuota.remainingQty ??
+    0
+  ));
+
+  return {
+    ...product,
+    id: product.id || product._id || code,
+    code,
+    name,
+    groupName,
+    category: product.category || groupName,
+    salePrice: Number(product.salePrice || product.price || 0),
+    availableQty,
+    stockQuantity: availableQty,
+    conversionRate: normalizePackingRate(product),
+    packingQty: normalizePackingRate(product),
+    unitsPerCase: normalizePackingRate(product),
+    stockDisplay: formatStockTL(availableQty, normalizePackingRate(product)),
+    maxOrderQty,
+    internalSaleQuota: {
+      ...internalSaleQuota,
+      remainingQty: Math.max(0, Number(internalSaleQuota.remainingQty || 0)),
+      currentlyAllowedQty: maxOrderQty
+    }
+  };
+}
+
+
+// MOBILE_PRODUCT_GROUP_FILTER_OPTIONS_START: tải danh sách Nhóm hàng để lọc sản phẩm trước khi tìm kiếm.
+function normalizeProductGroupName(value = '') {
+  return String(value || '').trim();
+}
+
+function escapeProductGroupHtml(value = '') {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function currentProductGroupFilter() {
+  return normalizeProductGroupName(productGroupFilter?.value || '');
+}
+
+function renderProductGroupOptions(groups = []) {
+  if (!productGroupFilter) return;
+  const current = currentProductGroupFilter();
+  const uniqueGroups = [...new Set((groups || []).map(normalizeProductGroupName).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+  productGroupFilter.innerHTML = [
+    '<option value="">Tất cả nhóm hàng</option>',
+    ...uniqueGroups.map((name) => `<option value="${escapeProductGroupHtml(name)}">${escapeProductGroupHtml(name)}</option>`)
+  ].join('');
+  if (current && uniqueGroups.includes(current)) productGroupFilter.value = current;
+}
+
+async function loadProductGroupOptions(force = false) {
+  if (!productGroupFilter) return;
+  if (productGroupOptionsLoaded && !force) return;
+  productGroupOptionsLoaded = true;
+  try {
+    const data = await mobileApi.getProducts('', { all: true, limit: 5000, inStockOnly: 0 });
+    const rows = normalizeProductSearchResponse(data).map(toMobileProduct);
+    renderProductGroupOptions(rows.map((row) => row.groupName || row.category));
+  } catch (err) {
+    console.warn('[mobile-sales] không tải được nhóm hàng sản phẩm:', err.message || err);
+  }
+}
+// MOBILE_PRODUCT_GROUP_FILTER_OPTIONS_END
+
+function resetSelectedProduct() {
+  selectedProduct = null;
+  if (productSearch) {
+    productSearch.dataset.id = '';
+    productSearch.dataset.code = '';
+    productSearch.dataset.name = '';
+    productSearch.dataset.type = '';
+  }
+  selectedProductBox.textContent = 'Chưa chọn sản phẩm';
+  selectedProductBox.classList.add('muted');
+}
+
+function pickProduct(product) {
+  const p = toMobileProduct(product);
+  selectedProduct = p;
+
+  // V45 Unified Search V2: input chỉ là phần hiển thị, dữ liệu chọn thật phải lưu ở dataset.
+  // Nếu chỉ set productSearch.value thì khi thêm hàng app không biết chắc sản phẩm đã chọn từ gợi ý nào.
+  productSearch.dataset.id = p.id || '';
+  productSearch.dataset.code = p.code || '';
+  productSearch.dataset.name = p.name || '';
+  productSearch.dataset.type = 'product';
+  productSearch.value = p.label || [p.code, p.name].filter(Boolean).join(' - ');
+
+  // MOBILE_SELECTED_PRODUCT_CARD_RENDER_START: card SP rõ tồn/giá, phù hợp thao tác nhập hàng trên mobile.
+  const selectedProductPrice = Number(p.finalPrice || p.unitPrice || p.salePrice || p.price || 0);
+  const selectedProductOriginalPrice = Number(p.originalPrice || p.grossPrice || p.catalogSalePrice || p.salePrice || p.price || 0);
+  const selectedProductPriceLabel = selectedProductOriginalPrice > selectedProductPrice
+    ? `Giá KM<strong>${money(selectedProductPrice)}</strong>`
+    : `Giá bán<strong>${money(selectedProductPrice)}</strong>`;
+  const selectedProductOriginalLabel = selectedProductOriginalPrice > selectedProductPrice
+    ? `<span>Giá gốc<strong>${money(selectedProductOriginalPrice)}</strong></span>`
+    : '';
+  selectedProductBox.innerHTML = `
+    <div class="mobile-selected-product-name">${escapeHtml(p.code || '')} - ${escapeHtml(p.name || '')}</div>
+    <div class="mobile-selected-product-meta">
+      <span>Tồn thực tế<strong>${escapeHtml(p.stockDisplay || formatStockTL(p.availableQty, p.conversionRate))}</strong></span>
+      <span class="mobile-app-quota-meta">Được bán App<strong>${escapeHtml(formatStockTL(p.maxOrderQty, p.conversionRate))}</strong></span>
+      <span>${selectedProductPriceLabel}</span>
+      ${selectedProductOriginalLabel}
+    </div>
+    <div class="mobile-selected-product-quota-note">Hạn mức theo file DMS: ${escapeHtml(p.internalSaleQuota?.snapshotDate || 'chưa cập nhật')}</div>
+  `;
+  // MOBILE_SELECTED_PRODUCT_CARD_RENDER_END
+  selectedProductBox.classList.remove('muted');
+  productSuggestions.innerHTML = '';
+  productSuggestions.classList.remove('has-many');
+  productSuggestions.hidden = true;
+  productSuggestions.style.display = 'none';
+  looseQtyInput.focus();
+}
+
+async function preloadUnifiedProducts(force = false) {
+  if (!window.UnifiedProductSearch) throw new Error('Thiếu UnifiedProductSearch. Kiểm tra sales.html đã nhúng productSearchBox.js chưa.');
+  if (force && window.CatalogCache) window.CatalogCache.invalidate('products');
+  return [];
+}
+
+function normalizeProductSearchResponse(data) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+  const rows = data.items || data.products || data.rows || data.data || data.result || [];
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function searchMobileProducts(keyword = '') {
+  const q = String(keyword || '').trim();
+  if (q.length < 2) return [];
+
+  // Ưu tiên API mobile vì có kèm Authorization token.
+  // Sau lần chuẩn hóa Unified Search V2, một số màn đang đọc nhầm data.products/data.rows
+  // trong khi API mới trả data.items, làm có request 200 nhưng không render gợi ý.
+  try {
+    // MOBILE_PRODUCT_GROUP_FILTER_SEARCH_START: tìm sản phẩm trong nhóm hàng đang chọn.
+    const data = await mobileApi.getProducts(q, { limit: 50, group: currentProductGroupFilter() });
+    // MOBILE_PRODUCT_GROUP_FILTER_SEARCH_END
+    const rows = normalizeProductSearchResponse(data).map(toMobileProduct);
+    if (window.UnifiedProductSearch && typeof window.UnifiedProductSearch.sync === 'function') {
+      window.UnifiedProductSearch.sync(rows);
+    }
+    return rows;
+  } catch (err) {
+    console.warn('[mobile-sales] mobile product search fallback:', err.message || err);
+  }
+
+  if (window.UnifiedSearchEngine && typeof window.UnifiedSearchEngine.searchProduct === 'function') {
+    const rows = await window.UnifiedSearchEngine.searchProduct(q, { limit: 50, mode: 'sales', includeStock: 1, group: currentProductGroupFilter() });
+    return normalizeProductSearchResponse(rows).map(toMobileProduct);
+  }
+
+  if (window.UnifiedProductSearch && typeof window.UnifiedProductSearch.search === 'function') {
+    const rows = await window.UnifiedProductSearch.search(q, { limit: 50, mode: 'sales', group: currentProductGroupFilter() });
+    return normalizeProductSearchResponse(rows).map(toMobileProduct);
+  }
+
+  return [];
+}
+
+function initProductAutocomplete() {
+  if (!productSearch || !productSuggestions) return;
+
+  if (!window.SearchAutocomplete || !window.UnifiedProductSearch) {
+    productSuggestions.innerHTML = '<div class="suggestion-empty">Thiếu engine gợi ý sản phẩm dùng chung.</div>';
+    return;
+  }
+
+  window.SearchAutocomplete.wire({
+    input: productSearch,
+    box: productSuggestions,
+    getItems: () => searchMobileProducts(productSearch.value.trim()),
+    label: (product) => (window.UnifiedProductSearch && typeof window.UnifiedProductSearch.label === 'function')
+      ? window.UnifiedProductSearch.label(product, 'sales')
+      : (product.label || [product.code, product.name].filter(Boolean).join(' - ')),
+    select: pickProduct,
+    emptyText: 'Không tìm thấy sản phẩm phù hợp'
+  });
+
+  productSearch.addEventListener('input', resetSelectedProduct);
+  // MOBILE_PRODUCT_GROUP_FILTER_CHANGE_START: đổi nhóm hàng thì xóa SP đang chọn để tránh thêm nhầm.
+  productGroupFilter?.addEventListener('change', () => {
+    resetSelectedProduct();
+    if (productSearch) productSearch.value = '';
+    if (productSuggestions) {
+      productSuggestions.innerHTML = '';
+      productSuggestions.classList.remove('has-many');
+      productSuggestions.hidden = true;
+      productSuggestions.style.display = 'none';
+    }
+  });
+  loadProductGroupOptions();
+  // MOBILE_PRODUCT_GROUP_FILTER_CHANGE_END
+  productSearch.addEventListener('focus', () => {
+    productSearch.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  productSearch.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      productSuggestions.innerHTML = '';
+      productSuggestions.classList.remove('has-many');
+    }
+  });
+
+}
+
+
+document.getElementById('addItemBtn').addEventListener('click', async () => {
+  // MOBILE_SALES_CART_PROMOTION_RECALC_ADD_START
+  setMessage(message, '');
+  if (!selectedCustomer) return setMessage(message, 'Chưa chọn khách hàng ở tab 1', 'error');
+  if (!selectedProduct) return setMessage(message, 'Chưa chọn sản phẩm', 'error');
+
+  const caseQty = Number(caseQtyInput?.value || 0);
+  const looseQty = Number(looseQtyInput?.value || 0);
+  const packingRate = normalizePackingRate(selectedProduct);
+  const qty = (caseQty > 0 && packingRate > 0 ? caseQty * packingRate : 0) + looseQty;
+  if (qty <= 0) return setMessage(message, 'Số lượng phải lớn hơn 0', 'error');
+
+  // V45 fix: tồn hiển thị trên autocomplete có thể bị cache/stale.
+  // Không chặn cứng ở frontend khi availableQty = 0/không có; backend sẽ kiểm tra lại tồn Mongo thật khi ghi đơn.
+  const availableQty = Number(selectedProduct.availableQty || 0);
+  const maxOrderQty = Math.max(0, Number(selectedProduct.maxOrderQty || 0));
+  if (availableQty > 0 && qty > availableQty) return setMessage(message, 'Số lượng vượt tồn thực tế', 'error');
+  if (qty > maxOrderQty) return setMessage(message, maxOrderQty > 0
+    ? `Sản phẩm chỉ còn được bán qua App ${formatStockTL(maxOrderQty, packingRate)}`
+    : 'Sản phẩm chưa có hạn mức bán qua App. Vui lòng cập nhật file tồn DMS buổi sáng.', 'error');
+
+  const grossPrice = Number(selectedProduct.salePrice || selectedProduct.price || 0);
+  const existed = cart.find((item) => item.productCode === selectedProduct.code);
+  if (existed) {
+    const nextQty = Number(existed.quantity || 0) + qty;
+    if (availableQty > 0 && nextQty > availableQty) return setMessage(message, 'Tổng số lượng vượt tồn thực tế', 'error');
+    if (nextQty > maxOrderQty) return setMessage(message, `Tổng số lượng vượt hạn mức bán App. Còn tối đa ${formatStockTL(maxOrderQty, packingRate)}`, 'error');
+    existed.quantity = nextQty;
+    existed.originalPrice = Number(existed.originalPrice || existed.grossPrice || existed.catalogSalePrice || grossPrice);
+    existed.grossPrice = existed.originalPrice;
+    existed.catalogSalePrice = existed.originalPrice;
+    attachPackingRate(existed, {
+      conversionRate: existed.conversionRate || selectedProduct.conversionRate,
+      unitsPerCase: existed.unitsPerCase || selectedProduct.unitsPerCase,
+      packingQty: existed.packingQty || selectedProduct.packingQty,
+      packQty: selectedProduct.packQty,
+      pack: selectedProduct.pack,
+      packageQty: selectedProduct.packageQty
+    });
+  } else {
+    cart.push(attachPackingRate({
+      productId: selectedProduct.id,
+      productCode: selectedProduct.code,
+      productName: selectedProduct.name,
+      unit: selectedProduct.unit,
+      quantity: qty,
+      originalPrice: grossPrice,
+      grossPrice,
+      catalogSalePrice: grossPrice,
+      grossAmount: Math.round(qty * grossPrice),
+      unitPrice: grossPrice,
+      salePrice: grossPrice,
+      price: grossPrice,
+      finalPrice: grossPrice,
+      discountAmount: 0,
+      promotionAmount: 0,
+      totalDiscountAmount: 0,
+      amount: Math.round(qty * grossPrice),
+      saleMethod: 'promotion',
+      saleMode: 'promotion',
+      pricingMode: 'promotion',
+      priceLocked: true,
+      maxOrderQty,
+      internalSaleQuota: selectedProduct.internalSaleQuota || {}
+    }, selectedProduct));
+  }
+
+  selectedProduct = null;
+  productSearch.value = '';
+  caseQtyInput.value = '';
+  looseQtyInput.value = '';
+  selectedProductBox.textContent = 'Chưa chọn sản phẩm';
+  selectedProductBox.classList.add('muted');
+  await recalculateCartPromotions();
+  renderCart();
+  setMessage(message, 'Đã thêm vào giỏ hàng và áp giá sau khuyến mại', 'success');
+  // MOBILE_SALES_CART_PROMOTION_RECALC_ADD_END
+});
+
+function renderCart() {
+  const total = cart.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  cartCount.textContent = `${cart.length} dòng`;
+  if (cartTabBadge) cartTabBadge.textContent = String(cart.length);
+  cartTotal.textContent = money(total);
+
+  if (!cart.length) {
+    cartList.className = 'cart-list empty';
+    cartList.textContent = 'Chưa có sản phẩm';
+    return;
+  }
+
+  cartList.className = 'cart-list';
+  // MOBILE_SALES_CART_PROMOTION_PRICE_DISPLAY_START
+  cartList.innerHTML = cart.map((item, index) => {
+    const originalPrice = Number(item.originalPrice || item.grossPrice || item.catalogSalePrice || item.salePrice || item.price || 0);
+    const unitPrice = Number(item.unitPrice || item.salePrice || item.price || 0);
+    const discountAmount = Number(item.discountAmount || item.promotionAmount || Math.max(0, (originalPrice - unitPrice) * Number(item.quantity || 0)));
+    const priceInfo = discountAmount > 0
+      ? `Giá gốc: ${money(originalPrice)} · KM: -${money(discountAmount)} · Giá bán: ${money(unitPrice)}`
+      : `Giá bán: ${money(unitPrice)}`;
+    return `
+    <div class="cart-item">
+      <strong>${escapeHtml(item.productCode)} - ${escapeHtml(item.productName)}</strong>
+      <span>SL: ${quantityDisplayTL(item)} · ${priceInfo} · Thành tiền: ${money(item.amount)}</span>
+      <button class="danger-btn small-btn" data-remove="${index}">Xóa</button>
+    </div>`;
+  }).join('');
+  // MOBILE_SALES_CART_PROMOTION_PRICE_DISPLAY_END
+
+  cartList.querySelectorAll('[data-remove]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      // MOBILE_SALES_CART_PROMOTION_RECALC_REMOVE_START
+      cart.splice(Number(btn.dataset.remove), 1);
+      await recalculateCartPromotions({ silent: true });
+      renderCart();
+      // MOBILE_SALES_CART_PROMOTION_RECALC_REMOVE_END
+    });
+  });
+}
+
+
+function debtCustomerKey(item = {}) {
+  return String(
+    item.customerId ||
+    item.customerCode ||
+    item.code ||
+    item.id ||
+    item._id ||
+    item.customerName ||
+    ''
+  ).trim();
+}
+
+function selectedDebtCustomer() {
+  if (!selectedDebtCustomerKey) return null;
+  return debtCache.find((item) => debtCustomerKey(item) === selectedDebtCustomerKey) || null;
+}
+
+function setDebtSubtab(nextSubtab, options = {}) {
+  const next = nextSubtab === 'collect' ? 'collect' : 'customers';
+  debtSubtab = next;
+
+  debtCustomersSubtab?.classList.toggle('active', next === 'customers');
+  debtCollectSubtab?.classList.toggle('active', next === 'collect');
+  debtCustomersSubtab?.setAttribute('aria-selected', String(next === 'customers'));
+  debtCollectSubtab?.setAttribute('aria-selected', String(next === 'collect'));
+  debtCustomersPanel?.classList.toggle('active', next === 'customers');
+  debtCollectPanel?.classList.toggle('active', next === 'collect');
+
+  if (next === 'collect') {
+    if (options.scroll !== false) {
+      document.getElementById('debtTab')?.scrollIntoView({ block: 'start', behavior: options.behavior || 'smooth' });
+    }
+    return;
+  }
+
+  if (options.restoreScroll !== false) {
+    window.requestAnimationFrame(() => window.scrollTo({ top: debtListScrollTop, behavior: 'auto' }));
+  }
+}
+
+function bindChooseDebtCustomerButton() {
+  document.getElementById('chooseDebtCustomerBtn')?.addEventListener('click', () => setDebtSubtab('customers'));
+}
+
+function openDebtCollection(item = {}) {
+  const nextKey = debtCustomerKey(item);
+  if (!nextKey || customerAvailableDebtValue(item) <= 0) return;
+
+  if (selectedDebtCustomerKey === nextKey) {
+    setDebtSubtab('collect');
+    return;
+  }
+
+  if (
+    debtFormDirty &&
+    selectedDebtCustomerKey &&
+    selectedDebtCustomerKey !== nextKey &&
+    !window.confirm('Bạn đang có phiếu thu chưa gửi. Dữ liệu hiện tại sẽ bị xóa khi chuyển khách hàng.')
+  ) {
+    return;
+  }
+
+  debtListScrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+  selectedDebtCustomerKey = nextKey;
+  debtFormDirty = false;
+  renderDebtLedger(item);
+  setDebtSubtab('collect');
+}
+
+function filteredAndSortedDebts(items = debtCache) {
+  const keyword = String(debtCustomerSearch?.value || '').trim().toLowerCase();
+  const sortMode = String(debtCustomerSort?.value || 'debt_desc');
+  const rows = (Array.isArray(items) ? items : [])
+    .map((item, originalIndex) => ({ item, originalIndex }))
+    .filter(({ item }) => {
+      if (!keyword) return true;
+      return [item.customerCode, item.customerName, item.phone, item.customerPhone]
+        .some((value) => String(value || '').toLowerCase().includes(keyword));
+    });
+
+  rows.sort((left, right) => {
+    const a = left.item;
+    const b = right.item;
+    if (sortMode === 'available_desc') {
+      return customerAvailableDebtValue(b) - customerAvailableDebtValue(a);
+    }
+    if (sortMode === 'oldest_asc') {
+      const aDate = formatShortDate(a.oldestDebtDate || '9999-12-31');
+      const bDate = formatShortDate(b.oldestDebtDate || '9999-12-31');
+      return aDate.localeCompare(bDate);
+    }
+    return customerDebtValue(b) - customerDebtValue(a);
+  });
+
+  return rows;
+}
+
+async function loadDebts(options = {}) {
+  const silent = !!options.silent;
+  const force = !!options.force;
+  const isDebtTabActive = document.getElementById('debtTab')?.classList.contains('active');
+
+  if (debtLoading) return;
+  if (debtLoaded && !force && debtCache.length && !silent) {
+    renderDebts(debtCache, {
+      totalDebt: debtCache.reduce((sum, item) => sum + Number(item.debtAmount || 0), 0),
+      pendingCollected: debtCache.reduce((sum, item) => sum + customerPendingCollectedValue(item), 0),
+      customerCount: debtCache.length
+    });
+    return;
+  }
+
+  const requestSeq = ++debtRequestSeq;
+  debtLoading = true;
+
+  try {
+    if (debtList && (!silent || isDebtTabActive)) {
+      debtList.className = 'order-list empty';
+      debtList.textContent = 'Đang tải công nợ...';
+    }
+
+    const data = await mobileApi.getSalesDebts({ limit: 100, includePaid: '0', includePendingCollections: '1', collectorType: 'sales' });
+
+    if (requestSeq !== debtRequestSeq) return;
+
+    debtCache = Array.isArray(data.items) ? data.items : [];
+    debtLoaded = true;
+
+    renderDebts(debtCache, data.summary || {});
+    if (Array.isArray(lastCustomers) && lastCustomers.length) renderCustomerList(lastCustomers);
+  } catch (err) {
+    if (requestSeq !== debtRequestSeq) return;
+    debtLoaded = false;
+
+    if (debtList && (!silent || isDebtTabActive)) {
+      debtList.className = 'order-list empty error-text';
+      debtList.textContent = err.message || 'Không tải được công nợ';
+    }
+    if (debtTotalAmount && (!silent || isDebtTabActive)) debtTotalAmount.textContent = '0';
+    if (debtCustomerCount && (!silent || isDebtTabActive)) debtCustomerCount.textContent = '0';
+    if (debtPendingAmount && (!silent || isDebtTabActive)) debtPendingAmount.textContent = '0';
+  } finally {
+    if (requestSeq === debtRequestSeq) debtLoading = false;
+  }
+}
+
+function renderDebts(items = debtCache, summary = {}) {
+  const total = Number(summary.totalDebt ?? items.reduce((sum, item) => sum + Number(item.debtAmount || 0), 0));
+  const pending = Number(summary.pendingCollected ?? items.reduce((sum, item) => sum + customerPendingCollectedValue(item), 0));
+  if (debtTotalAmount) debtTotalAmount.textContent = money(total);
+  if (debtCustomerCount) debtCustomerCount.textContent = String(summary.customerCount ?? items.length);
+  if (debtPendingAmount) debtPendingAmount.textContent = money(pending);
+
+  renderDebtCustomerList(items);
+
+  if (selectedDebtCustomerKey) {
+    const selected = selectedDebtCustomer();
+    if (selected) {
+      if (!debtFormDirty) renderDebtLedger(selected);
+    } else {
+      selectedDebtCustomerKey = '';
+      debtFormDirty = false;
+      renderDebtLedger();
+    }
+  } else {
+    renderDebtLedger();
+  }
+}
+
+function renderDebtCustomerList(items = debtCache) {
+  if (!debtList) return;
+  const source = Array.isArray(items) ? items : [];
+
+  if (!source.length) {
+    debtList.className = 'order-list empty';
+    debtList.textContent = 'Không có khách hàng còn nợ';
+    return;
+  }
+
+  const visible = filteredAndSortedDebts(source);
+  if (!visible.length) {
+    debtList.className = 'order-list empty';
+    debtList.textContent = 'Không tìm thấy khách hàng phù hợp';
+    return;
+  }
+
+  debtList.className = 'order-list debt-customer-list';
+  debtList.innerHTML = visible.map(({ item, originalIndex }) => {
+    const available = customerAvailableDebtValue(item);
+    const disabled = available <= 0;
+    return `
+      <article class="debt-card${debtCustomerKey(item) === selectedDebtCustomerKey ? ' selected' : ''}">
+        <div class="debt-card-content">
+          <strong>${escapeHtml(item.customerCode || '')} - ${escapeHtml(item.customerName || '')}</strong>
+          <span>Công nợ: ${money(item.debtAmount || 0)} · Chờ KT: ${money(customerPendingCollectedValue(item))} · Có thể thu: ${money(available)}</span>
+          <span>${item.orderCount || 0} đơn · Nợ cũ nhất: ${formatDisplayDate(item.oldestDebtDate || '')}</span>
+        </div>
+        <button type="button" class="${disabled ? 'ghost-btn' : 'primary-btn'} small-btn debt-collect-action" data-debt-index="${originalIndex}" ${disabled ? 'disabled aria-disabled="true"' : ''}>
+          ${disabled ? 'Đang chờ KT' : 'Thu nợ'}
+        </button>
+      </article>`;
+  }).join('');
+
+  debtList.querySelectorAll('[data-debt-index]:not([disabled])').forEach((btn) => {
+    btn.addEventListener('click', () => openDebtCollection(source[Number(btn.dataset.debtIndex)]));
+  });
+}
+
+function debtOrderRows(item = {}) {
+  const orders = Array.isArray(item.orders) ? item.orders : [];
+  if (orders.length) return orders.filter((row) => Number(row.availableDebt ?? row.debt ?? 0) > 0);
+  const ledgers = Array.isArray(item.ledgers) ? item.ledgers : [];
+  return ledgers
+    .filter((row) => Number(row.debt || 0) > 0)
+    .map((row) => ({
+      salesOrderCode: row.salesOrderCode || row.refCode || row.orderCode || '',
+      orderCode: row.salesOrderCode || row.refCode || row.orderCode || '',
+      orderDate: row.date || row.documentDate || '',
+      debt: Number(row.debt || 0),
+      availableDebt: Number(row.debt || 0),
+      pendingCollectedAmount: 0
+    }));
+}
+
+function selectedDebtCollectionAllocations(item = {}, amount = 0) {
+  const rows = debtOrderRows(item);
+  const checked = [...document.querySelectorAll('.mobile-debt-order-check:checked')]
+    .map((el) => Number(el.dataset.index))
+    .filter((index) => Number.isFinite(index));
+  let remain = Math.max(0, Number(amount || 0));
+  const allocations = [];
+  checked.forEach((index) => {
+    const order = rows[index];
+    const available = Math.max(0, Number(order?.availableDebt ?? order?.debt ?? 0));
+    const allocatedAmount = Math.min(available, remain);
+    if (order && allocatedAmount > 0) {
+      allocations.push({
+        salesOrderId: order.salesOrderId || order.orderId || '',
+        salesOrderCode: order.salesOrderCode || order.orderCode || '',
+        allocatedAmount
+      });
+      remain -= allocatedAmount;
+    }
+  });
+  return allocations;
+}
+
+function updateMobileDebtCollectionAmount(item = {}) {
+  const rows = debtOrderRows(item);
+  const total = [...document.querySelectorAll('.mobile-debt-order-check:checked')].reduce((sum, el) => {
+    const row = rows[Number(el.dataset.index)];
+    return sum + Math.max(0, Number(row?.availableDebt ?? row?.debt ?? 0));
+  }, 0);
+  const input = document.getElementById('mobileDebtCollectionAmount');
+  if (input) input.value = String(total);
+  debtFormDirty = true;
+}
+
+function renderDebtLedger(item = {}) {
+  if (!debtLedgerList) return;
+  const key = debtCustomerKey(item);
+  if (!key) {
+    debtLedgerList.className = 'order-list empty';
+    debtLedgerList.innerHTML = `
+      <div class="debt-empty-state">
+        <strong>Chưa chọn khách hàng để thu nợ</strong>
+        <span>Chọn một khách hàng trong tab Khách nợ để mở biểu mẫu.</span>
+        <button id="chooseDebtCustomerBtn" type="button" class="ghost-btn">Chọn khách hàng</button>
+      </div>`;
+    bindChooseDebtCustomerButton();
+    return;
+  }
+
+  const rows = Array.isArray(item.ledgers) ? item.ledgers : [];
+  const orderRows = debtOrderRows(item);
+  let balance = 0;
+  const ledgerHtml = rows.length ? `
+    <details class="debt-ledger-details">
+      <summary>Sổ công nợ (${rows.length} dòng)</summary>
+      <div class="order-list">
+        ${rows.map((row) => {
+          balance += Number(row.debit || 0) - Number(row.credit || 0);
+          return `
+            <div class="order-item">
+              <strong>${escapeHtml(formatDisplayDate(row.date))} · ${escapeHtml(row.type || row.refType || '')}</strong>
+              <span>Đơn: ${escapeHtml(row.salesOrderCode || row.refCode || '')}</span>
+              <span>Phát sinh: ${money(row.debit || 0)} · Thanh toán: ${money(row.credit || 0)} · Dư nợ: ${money(Math.max(0, balance))}</span>
+            </div>`;
+        }).join('')}
+      </div>
+    </details>` : '';
+
+  const customerHeader = `
+    <div class="debt-selected-customer">
+      <strong>${escapeHtml(item.customerCode || '')} - ${escapeHtml(item.customerName || '')}</strong>
+      <span>Nợ: ${money(customerDebtValue(item))} · Chờ KT: ${money(customerPendingCollectedValue(item))} · Có thể thu: ${money(customerAvailableDebtValue(item))}</span>
+    </div>`;
+
+  const formHtml = orderRows.length ? `
+    <form id="mobileDebtCollectionForm" class="order-list mobile-debt-collection-form">
+      <strong>Báo thu nợ chờ kế toán xác nhận</strong>
+      <span>Chọn đơn nợ, nhập số tiền đã thu. Công nợ chỉ giảm sau khi kế toán xác nhận.</span>
+      <div class="order-list debt-order-selection-list">
+        ${orderRows.map((order, index) => `
+          <label class="order-item debt-order-check-row">
+            <input type="checkbox" class="mobile-debt-order-check" data-index="${index}" checked />
+            <strong>${escapeHtml(order.salesOrderCode || order.orderCode || '')}</strong>
+            <span>Ngày: ${formatDisplayDate(order.orderDate || order.documentDate || '')} · Nợ: ${money(order.debt || 0)} · Chờ KT: ${money(order.pendingCollectedAmount || 0)} · Có thể thu: ${money(order.availableDebt ?? order.debt ?? 0)}</span>
+          </label>`).join('')}
+      </div>
+      <label>Số tiền đã thu<input id="mobileDebtCollectionAmount" name="amount" inputmode="numeric" value="${Math.max(0, Math.round(customerAvailableDebtValue(item)))}" /></label>
+      <label>Hình thức<select id="mobileDebtCollectionMethod" name="paymentMethod"><option value="cash">Tiền mặt</option><option value="bank_transfer">Chuyển khoản</option><option value="other">Khác</option></select></label>
+      <label>Ghi chú<input id="mobileDebtCollectionNote" name="note" placeholder="VD: Khách trả một phần" /></label>
+      <div class="debt-submit-bar">
+        <button type="submit" class="primary-btn full-btn">Gửi phiếu thu chờ kế toán</button>
+      </div>
+      <p id="mobileDebtCollectionMessage" class="message"></p>
+    </form>` : `
+      <div class="order-item debt-no-available">
+        <strong>Không còn số tiền có thể thu</strong>
+        <span>Khách hàng đang có phiếu thu chờ kế toán hoặc công nợ đã được xử lý.</span>
+      </div>`;
+
+  debtLedgerList.className = 'order-list';
+  debtLedgerList.innerHTML = customerHeader + formHtml + ledgerHtml;
+  debtLedgerList.querySelectorAll('.mobile-debt-order-check').forEach((el) => {
+    el.addEventListener('change', () => updateMobileDebtCollectionAmount(item));
+  });
+  const form = document.getElementById('mobileDebtCollectionForm');
+  if (form) {
+    form.addEventListener('input', () => { debtFormDirty = true; });
+    form.addEventListener('change', () => { debtFormDirty = true; });
+    form.addEventListener('submit', (event) => submitMobileDebtCollection(event, item));
+  }
+}
+
+async function submitMobileDebtCollection(event, item = {}) {
+  event.preventDefault();
+  const form = event.target;
+  const msg = document.getElementById('mobileDebtCollectionMessage');
+  const amount = parseMobileMoneyInput(form.elements.amount?.value || 0);
+  if (amount <= 0) return setMessage(msg, 'Số tiền thu phải lớn hơn 0', 'error');
+  const allocations = selectedDebtCollectionAllocations(item, amount);
+  if (!allocations.length) return setMessage(msg, 'Cần chọn ít nhất một đơn nợ', 'error');
+  const totalAllocated = allocations.reduce((sum, row) => sum + Number(row.allocatedAmount || 0), 0);
+  if (totalAllocated !== amount) return setMessage(msg, 'Tổng tiền phân bổ phải bằng số tiền thu', 'error');
+  const button = form.querySelector('button[type="submit"]');
+  setButtonBusy(button, true, 'Đang gửi...');
+  try {
+    const data = await mobileApi.submitDebtCollection({
+      customerId: item.customerId || '',
+      customerCode: item.customerCode || '',
+      customerName: item.customerName || '',
+      amount,
+      paymentMethod: form.elements.paymentMethod?.value || 'cash',
+      note: form.elements.note?.value || '',
+      allocations
+    });
+    const successText = data.message || 'Đã ghi nhận thu nợ, chờ kế toán xác nhận';
+    setMessage(msg, successText, 'success');
+    setMessage(debtTabMessage, successText, 'success');
+    debtFormDirty = false;
+    selectedDebtCustomerKey = '';
+    debtLoaded = false;
+    await loadDebts({ force: true });
+    setDebtSubtab('customers', { restoreScroll: true });
+  } catch (err) {
+    setMessage(msg, err.message || 'Không gửi được phiếu thu nợ', 'error');
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+submitOrderBtn.addEventListener('click', async () => {
+  if (submitOrderBtn.disabled) return;
+  setMessage(message, '');
+  if (!selectedCustomer) return setMessage(message, 'Chưa chọn khách hàng', 'error');
+  const customerPayload = normalizeSelectedCustomerForSubmit(selectedCustomer);
+  if (!customerPayload.code && !customerPayload.customerCode && !customerPayload.id && !customerPayload.customerId) {
+    return setMessage(message, 'Thiếu mã khách hàng, vui lòng chọn lại khách ở tab Khách hàng', 'error');
+  }
+  if (!cart.length) return setMessage(message, 'Chưa có sản phẩm', 'error');
+  setButtonBusy(submitOrderBtn, true);
+
+  try {
+    const paidAmount = Number(paidAmountInput.value || 0);
+    // MOBILE_SALES_CART_PROMOTION_RECALC_SUBMIT_START
+    await recalculateCartPromotions({ silent: true });
+    const payload = {
+      customer: customerPayload,
+      customerId: customerPayload.customerId || customerPayload.id || customerPayload.code || '',
+      customerCode: customerPayload.customerCode || customerPayload.code || '',
+      customerName: customerPayload.customerName || customerPayload.name || '',
+      items: cart.map((item) => ({
+        ...item,
+        grossPrice: Number(item.grossPrice || item.originalPrice || item.catalogSalePrice || item.salePrice || item.price || 0),
+        originalPrice: Number(item.originalPrice || item.grossPrice || item.catalogSalePrice || item.salePrice || item.price || 0),
+        unitPrice: Number(item.unitPrice || item.finalPrice || item.salePrice || item.price || 0),
+        salePrice: Number(item.salePrice || item.unitPrice || item.finalPrice || item.price || 0),
+        finalPrice: Number(item.finalPrice || item.unitPrice || item.salePrice || item.price || 0),
+        discountAmount: Number(item.discountAmount || item.promotionAmount || item.totalDiscountAmount || 0),
+        amount: Number(item.amount || 0),
+        saleMode: 'promotion',
+        saleMethod: 'promotion',
+        pricingMode: 'promotion',
+        priceLocked: true
+      })),
+      paidAmount,
+      note: editingOrderId ? 'Sửa từ app bán hàng mobile' : 'Tạo từ app bán hàng mobile'
+    };
+    // MOBILE_SALES_CART_PROMOTION_RECALC_SUBMIT_END
+    const data = editingOrderId
+      ? await mobileApi.updateSalesOrder(editingOrderId, payload)
+      : await mobileApi.createSalesOrder(payload);
+
+    const code = data.salesOrder?.code || '';
+    if (window.CatalogCache) window.CatalogCache.invalidate('products');
+    clearOrderForm(false);
+    upsertTodayOrder(data.salesOrder);
+    setMessage(message, `${data.message || 'Đã lưu đơn'} ${code}`, 'success');
+    await loadDebts();
+    switchTab('reportTab');
+  } catch (err) {
+    setMessage(message, err.message, 'error');
+  } finally {
+    setButtonBusy(submitOrderBtn, false);
+  }
+});
+
+function clearOrderForm(clearCustomer = true) {
+  cart = [];
+  editingOrderId = '';
+  selectedProduct = null;
+  productSearch.value = '';
+  caseQtyInput.value = '';
+  looseQtyInput.value = '';
+  paidAmountInput.value = '';
+  selectedProductBox.textContent = 'Chưa chọn sản phẩm';
+  selectedProductBox.classList.add('muted');
+  orderFormTitle.textContent = 'Đặt hàng';
+  submitOrderBtn.textContent = 'Xác nhận đơn';
+  if (clearCustomer) {
+    selectedCustomer = null;
+    selectedCustomerBox.textContent = 'Chưa chọn khách hàng. Hãy sang tab Khách hàng để chọn.';
+    selectedCustomerBox.classList.add('muted');
+    setMessage(message, 'Đã làm mới đơn. Hãy chọn khách hàng ở tab 1.', 'success');
+  }
+  renderCart();
+}
+
+async function editTodayOrder(orderId) {
+  try {
+    const data = await mobileApi.getSalesOrder(orderId);
+    const order = data.order;
+    if (!order.canEdit) return setMessage(message, order.editLockReason || 'Đơn hiện không thể chỉnh sửa trên app bán hàng.', 'error');
+
+    editingOrderId = order.id || order.code;
+    selectedCustomer = {
+      id: order.customerId,
+      code: order.customerCode,
+      name: order.customerName,
+      phone: order.customerPhone,
+      address: order.customerAddress,
+      debtAmount: order.customerDebt || 0,
+      monthRevenue: order.customerMonthRevenue || 0
+    };
+    selectedCustomerBox.innerHTML = `<strong>${escapeHtml(order.customerCode || '')} - ${escapeHtml(order.customerName || '')}</strong><br /><span>${escapeHtml(order.customerPhone || '')} · ${escapeHtml(order.customerAddress || '')}</span>`;
+    selectedCustomerBox.classList.remove('muted');
+
+    cart = (order.items || []).map((item) => ({
+      productId: item.productId || item.productCode,
+      productCode: item.productCode,
+      productName: item.productName,
+      unit: item.unit,
+      conversionRate: item.conversionRate,
+      quantity: Number(item.quantity || 0),
+      // MOBILE_SALES_CART_PROMOTION_PRICE_DISPLAY_START
+      originalPrice: Number(item.originalPrice || item.grossPrice || item.catalogSalePrice || item.salePrice || item.price || 0),
+      unitPrice: Number(item.unitPrice || item.salePrice || item.price || 0),
+      salePrice: Number(item.salePrice || item.unitPrice || item.price || 0),
+      price: Number(item.price || item.unitPrice || item.salePrice || 0),
+      discountAmount: Number(item.discountAmount || item.promotionAmount || item.totalDiscountAmount || 0),
+      promotionAmount: Number(item.promotionAmount || item.discountAmount || item.totalDiscountAmount || 0),
+      amount: Number(item.amount || Number(item.quantity || 0) * Number(item.unitPrice || item.salePrice || item.price || 0)),
+      promotionCode: item.promotionCode || '',
+      promotionName: item.promotionName || ''
+      // MOBILE_SALES_CART_PROMOTION_PRICE_DISPLAY_END
+    }));
+    paidAmountInput.value = Number(order.paidAmount || 0);
+    orderFormTitle.textContent = `Sửa đơn ${order.code || ''}`;
+    submitOrderBtn.textContent = `Lưu sửa đơn ${order.code || ''}`;
+    // MOBILE_SALES_CART_PROMOTION_RECALC_EDIT_START
+    await recalculateCartPromotions({ silent: true });
+    // MOBILE_SALES_CART_PROMOTION_RECALC_EDIT_END
+    renderCart();
+    setMessage(message, `Đang sửa đơn ${order.code || ''}. Khi lưu, hệ thống sẽ tự điều chỉnh tồn kho và hạn mức bán App theo phần chênh lệch.`, 'success');
+    switchTab('orderTab');
+  } catch (err) {
+    setMessage(message, err.message, 'error');
+  }
+}
+
+async function deleteTodayOrder(orderId, orderCode) {
+  const ok = window.confirm(`Xóa đơn ${orderCode || orderId}? Chỉ xóa được khi đơn chưa gộp đơn tổng.`);
+  if (!ok) return;
+  try {
+    const data = await mobileApi.deleteSalesOrder(orderId);
+    await loadTodayOrders();
+    setMessage(message, data.message || 'Đã xóa đơn', 'success');
+  } catch (err) {
+    setMessage(message, err.message, 'error');
+  }
+}
+
+
+function renderTodayOrders(items = todayOrderCache) {
+  todayOrderCache = Array.isArray(items) ? items : [];
+  const totalAmount = todayOrderCache.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0);
+  const paidAmount = todayOrderCache.reduce((sum, order) => sum + Number(order.paidAmount || 0), 0);
+  const debtAmount = todayOrderCache.reduce((sum, order) => sum + Number(order.debtAmount || 0), 0);
+
+  document.getElementById('todayRevenue').textContent = money(totalAmount);
+  document.getElementById('todayOrderCount').textContent = String(todayOrderCache.length);
+  document.getElementById('todayPaid').textContent = money(paidAmount);
+  document.getElementById('todayDebt').textContent = money(debtAmount);
+
+  if (!todayOrderCache.length) {
+    todayOrders.className = 'order-list empty';
+    todayOrders.textContent = 'Chưa có đơn';
+    return;
+  }
+
+  todayOrders.className = 'order-list';
+  todayOrders.innerHTML = todayOrderCache.map((order) => `
+    <div class="order-item">
+      <strong>${escapeHtml(order.code)} - ${escapeHtml(order.customerName || '')}</strong>
+      <span>Ngày: ${formatShortDate(order.date)} · Tổng: ${money(order.totalAmount)} · Đã thu: ${money(order.paidAmount)} · Còn nợ: ${money(order.debtAmount)}</span>
+      <span>Trạng thái: ${escapeHtml(order.status || '')} / ${escapeHtml(order.deliveryStatus || '')} · ${order.canEdit ? 'Có thể chỉnh sửa' : escapeHtml(order.editLockReason || 'Không thể chỉnh sửa')}</span>
+      <div class="row-actions">
+        ${order.canEdit ? `<button type="button" class="ghost-btn small-btn" data-edit-order="${escapeHtml(order.id || order.code)}">Chỉnh sửa</button><button type="button" class="danger-btn small-btn" data-delete-order="${escapeHtml(order.id || order.code)}" data-order-code="${escapeHtml(order.code)}">Xóa</button>` : `<span class="muted">${escapeHtml(order.editLockReason || 'Không thể sửa/xóa trên app')}</span>`}
+      </div>
+    </div>
+  `).join('');
+
+}
+
+function upsertTodayOrder(order = {}) {
+  if (!order || !(order.id || order.code)) return;
+  const key = String(order.id || order.code);
+  const normalized = {
+    ...order,
+    canEdit: order.canEdit !== false && !order.masterOrderId && !order.masterOrderCode && (order.mergeStatus || 'unmerged') !== 'merged',
+    editLockReason: order.editLockReason || ''
+  };
+  const index = todayOrderCache.findIndex((item) => String(item.id || item.code) === key || String(item.code || '') === String(order.code || ''));
+  if (index >= 0) todayOrderCache[index] = { ...todayOrderCache[index], ...normalized };
+  else todayOrderCache.unshift(normalized);
+  renderTodayOrders(todayOrderCache);
+}
+
+async function loadTodayOrders() {
+  try {
+    const data = await mobileApi.getMySalesOrders();
+    const rawItems = data.items || [];
+    const scopedItems = filterOrdersForCurrentSalesUser(rawItems);
+    renderTodayOrders(scopedItems);
+    if (rawItems.length !== scopedItems.length) {
+      console.warn('[MOBILE_SALES_OWNER_GUARD]', {
+        currentSalesStaffCode: currentSalesStaffCode(),
+        received: rawItems.length,
+        rendered: scopedItems.length
+      });
+    }
+  } catch (err) {
+    todayOrders.className = 'order-list empty';
+    todayOrders.textContent = err.message;
+  }
+}

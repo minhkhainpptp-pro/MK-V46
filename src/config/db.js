@@ -1,26 +1,38 @@
 const mongoose = require('mongoose');
 
-async function connectMongo() {
+const connectDB = async () => {
+  const mongoUri = process.env.MONGO_URI;
+
+  if (!mongoUri) {
+    throw new Error('❌ Thiếu MONGO_URI trong environment variables');
+  }
+
   try {
-    const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI;
-    if (!mongoUri) {
-      throw new Error('MONGO_URI is required');
-    }
+    mongoose.set('strictQuery', true);
+    mongoose.set('debug', process.env.MONGOOSE_DEBUG === 'true' || process.env.NODE_ENV === 'development');
+
+    // Index được quản lý tập trung bởi mongoIndexService. Mặc định tắt autoIndex
+    // để Mongoose không tự tạo thêm username_1/roleCode_1/... chồng lên policy chuẩn.
+    const autoIndex = process.env.MONGOOSE_AUTO_INDEX === 'true';
+    mongoose.set('autoIndex', autoIndex);
+
     await mongoose.connect(mongoUri, {
-      autoIndex: process.env.NODE_ENV !== 'production' && process.env.MONGO_AUTOINDEX !== '0',
+      autoIndex,
+      maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE || 50),
+      minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE || 5),
+      serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 5000),
+      socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 45000),
+      family: 4,
+      retryWrites: true,
+      w: process.env.MONGO_WRITE_CONCERN || 'majority'
     });
-    console.log('MongoDB Connected');
+
+    console.log('✅ MongoDB connected');
+    return true;
   } catch (error) {
-    console.error('MongoDB Error', error);
+    console.error('❌ MongoDB connection error:', error.message);
     throw error;
   }
-}
-
-function isMongoConnected() {
-  return mongoose.connection.readyState === 1;
-}
-
-module.exports = {
-  connectMongo,
-  isMongoConnected
 };
+
+module.exports = connectDB;

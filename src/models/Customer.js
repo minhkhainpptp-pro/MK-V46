@@ -1,53 +1,60 @@
+const { normalizeSearchText } = require('../utils/search.util');
 const mongoose = require('mongoose');
-const { createBaseSchema } = require('../core/baseSchema');
 
-const schema = createBaseSchema({
-  // Catalog customer fields - single canonical naming.
-  customerCode: { type: String, required: true, trim: true },
-  customerName: { type: String, required: true, trim: true },
 
+
+const customerSchema = new mongoose.Schema({
+  code: { type: String, default: '', trim: true },
+  name: { type: String, required: true, trim: true },
+  businessName: { type: String, default: '', trim: true, maxlength: 250 },
   phone: { type: String, default: '', trim: true },
   address: { type: String, default: '', trim: true },
-
-  routeCode: { type: String, default: '', trim: true },
-  routeName: { type: String, default: '', trim: true },
-
-  salesStaffCode: { type: String, default: '', trim: true },
-  salesStaffName: { type: String, default: '', trim: true },
-
-  deliveryStaffCode: { type: String, default: '', trim: true },
-  deliveryStaffName: { type: String, default: '', trim: true },
-
+  taxCode: { type: String, default: '', trim: true },
+  taxInvoiceAddress: { type: String, default: '', trim: true },
+  area: { type: String, default: '', trim: true },
+  route: { type: String, default: '', trim: true },
+  legacyStaffCode: { type: String, default: '', trim: true },
+  legacyStaffName: { type: String, default: '', trim: true },
+  staffCode: { type: String, default: '', trim: true },
+  staffName: { type: String, default: '', trim: true },
+  openingDebt: { type: Number, default: 0 },
+  debtLimit: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
+  searchText: { type: String, default: '', trim: true }
+}, { timestamps: true, strict: false, versionKey: false });
+
+// Index được chuẩn hoá tập trung tại src/services/mongoIndexService.js.
+
+
+customerSchema.pre('validate', function buildSearchText(next) {
+  this.searchText = normalizeSearchText([
+    this.code,
+    this.customerCode,
+    this.name,
+    this.customerName,
+    this.businessName,
+    this.customerBusinessName,
+    this.householdBusinessName,
+    this.taxBusinessName,
+    this.invoiceBusinessName,
+    this.tenHoKinhDoanh,
+    this.phone,
+    this.address,
+    this.taxCode,
+    this.customerTaxCode,
+    this.taxNumber,
+    this.vatNumber,
+    this.vatCode,
+    this.mst,
+    this.taxInvoiceAddress,
+    this.customerTaxInvoiceAddress,
+    this.invoiceAddress,
+    this.vatInvoiceAddress,
+    this.billingAddress,
+    this.area,
+    this.route
+  ].filter(Boolean).join(' '));
+  next();
 });
 
-// Keep base `code` as a compatibility/business alias, but customerCode is the canonical key.
-schema.pre('validate', function normalizeCustomerFields() {
-  if (!this.customerCode && this.code) this.customerCode = this.code;
-  if (!this.customerName && this.name) this.customerName = this.name;
-
-  this.customerCode = String(this.customerCode || '').trim();
-  this.customerName = String(this.customerName || '').trim();
-
-  if (!this.code && this.customerCode) this.code = this.customerCode;
-  this.code = String(this.code || this.customerCode || '').trim();
-
-  if (this.name !== undefined || this.customerName) {
-    this.name = String(this.customerName || this.name || '').trim();
-  }
-});
-
-schema.index(
-  { customerCode: 1 },
-  {
-    unique: true,
-    name: 'idx_customer_customer_code_unique',
-    partialFilterExpression: { customerCode: { $type: 'string', $gt: '' } },
-  }
-);
-schema.index({ salesStaffCode: 1 }, { name: 'idx_customer_sales_staff_code' });
-schema.index({ deliveryStaffCode: 1 }, { name: 'idx_customer_delivery_staff_code' });
-schema.index({ routeCode: 1 }, { name: 'idx_customer_route_code' });
-schema.index({ customerName: 'text', customerCode: 'text', phone: 'text' }, { name: 'idx_customer_search_text' });
-
-module.exports = mongoose.models.Customer || mongoose.model('Customer', schema, 'customers');
+module.exports = mongoose.model('Customer', customerSchema);

@@ -1,3 +1,16 @@
-const router = require('express').Router();
-router.get('/', (req, res) => res.json({ ok: true, name: 'MK-V46 Clean Core', time: new Date().toISOString() }));
-module.exports = router;
+'use strict';
+
+function registerHealthRoutes(app) {
+  app.get('/api/health/db', (req, res) => {
+    const mongoose = require('mongoose');
+    const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    const ok = mongoose.connection.readyState === 1;
+    res.status(ok ? 200 : 503).json({
+      ok,
+      state: states[mongoose.connection.readyState] || 'unknown',
+      readyState: mongoose.connection.readyState
+    });
+  });
+}
+
+module.exports = { registerHealthRoutes };

@@ -1,56 +1,75 @@
-const mongoose = require('mongoose');
-const { createBaseSchema } = require('../core/baseSchema');
+const flexModel = require('./_flexModel');
+module.exports = flexModel('ReturnOrder', 'returnOrders', {
+  id: String,
+  code: String,
+  customerId: String,
+  customerCode: String,
+  customerName: String,
 
-const ReturnItemSchema = new mongoose.Schema({
-  productCode: { type: String, required: true },
-  productName: { type: String, default: '' },
-  orderedQty: { type: Number, default: 0 },
-  deliveredQty: { type: Number, default: 0 },
-  returnQty: { type: Number, required: true, min: 0 },
-  price: { type: Number, default: 0 },
-  salePrice: { type: Number, default: 0 },
-  amount: { type: Number, default: 0 },
-  returnAmount: { type: Number, default: 0 },
-}, { _id: false });
+  // Khai báo rõ các field được dùng trong strictQuery và tìm kiếm.
+  date: String,
+  documentDate: String,
+  deliveryDate: String,
+  returnDate: String,
+  salesStaffId: String,
+  salesStaffCode: String,
+  salesStaffName: String,
+  salesmanCode: String,
+  salesmanName: String,
+  deliveryStaffId: String,
+  deliveryStaffCode: String,
+  deliveryStaffName: String,
+  deliveryCode: String,
+  deliveryName: String,
+  nvghCode: String,
+  nvghName: String,
+  nvbhCode: String,
+  nvbhName: String,
+  note: String,
 
-const schema = createBaseSchema({
-  code: { type: String, required: true },
-  salesOrderId: { type: String, required: true },
-  salesOrderCode: { type: String, required: true },
-  normalizedSalesOrderCode: { type: String, default: '' },
-  masterOrderId: { type: String, default: '' },
-  masterOrderCode: { type: String, default: '' },
+  sourceOrderId: String,
+  salesOrderId: String,
+  salesOrderCode: String,
+  orderId: String,
+  orderCode: String,
+  masterOrderId: String,
+  masterOrderCode: String,
+  items: Array,
+  amount: Number,
+  returnAmount: Number,
+  status: String,
+  returnStatus: String,
 
-  customerCode: { type: String, default: '' },
-  customerName: { type: String, default: '' },
-  productCode: { type: String, default: '' },
-  productName: { type: String, default: '' },
-  returnQty: { type: Number, default: 0 },
-  price: { type: Number, default: 0 },
-  amount: { type: Number, default: 0 },
+  // A5 - Return state machine
+  returnState: String,
+  stateChangedAt: String,
+  stateChangedBy: String,
+  stateHistory: Array,
 
-  items: { type: [ReturnItemSchema], default: [] },
-  totalReturnQty: { type: Number, default: 0 },
-  totalReturnAmount: { type: Number, default: 0 },
+  // Trạng thái gộp tách biệt hoàn toàn với vòng đời phiếu trả.
+  returnMergeStatus: String,
+  masterReturnOrderId: String,
+  masterReturnOrderCode: String,
 
-  deliveryDate: { type: String, default: '' },
-  deliveryStaffCode: { type: String, default: '' },
-  deliveryStaffName: { type: String, default: '' },
-  salesStaffCode: { type: String, default: '' },
-  salesStaffName: { type: String, default: '' },
+  warehouseStatus: String,
+  warehouseReceiveStatus: String,
+  stockReceiveStatus: String,
+  stockPosted: Boolean,
+  stockPostedAt: String,
+  receivedAt: String,
+  receivedBy: String,
 
-  status: { type: String, enum: ['pending', 'active', 'cancelled', 'posted', 'confirmed'], default: 'active' },
-  accountingStatus: { type: String, enum: ['pending', 'posted', 'cancelled', 'confirmed'], default: 'pending' },
-  cancelledAt: { type: Date },
-  cancelReason: { type: String, default: '' },
-  confirmedAt: { type: Date },
-  confirmedBy: { type: String, default: '' },
-  arPosted: { type: Boolean, default: false },
-  note: { type: String, default: '' },
+  accountingStatus: String,
+  accountingConfirmed: Boolean,
+  accountingConfirmedAt: String,
+  accountingBatchId: String,
+  accountingConfirmedBy: String,
+  accountingNote: String,
+
+  arPosted: Boolean,
+  arPostedAt: String,
+  arLedgerId: String,
+
+  createdAt: String,
+  updatedAt: String
 });
-
-schema.index({ salesOrderId: 1, status: 1 }, { name: 'idx_ro_so_status' });
-schema.index({ salesOrderCode: 1, status: 1 }, { name: 'idx_ro_code_status' });
-schema.index({ deliveryDate: 1, deliveryStaffCode: 1 }, { name: 'idx_ro_delivery_staff' });
-
-module.exports = mongoose.models.ReturnOrder || mongoose.model('ReturnOrder', schema, 'returnOrders');
