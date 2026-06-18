@@ -1,24 +1,8 @@
 'use strict';
 
 const inventoryService = require('../../services/inventoryService');
-const integrationConfig = require('../../config/integrationConfig');
-
-function assertLocalInventoryEnabled(action) {
-  if (
-    integrationConfig.isS3Execution
-    && integrationConfig.inventoryAuthority === 'S3'
-  ) {
-    const err = new Error(
-      `Không được ${action}: tồn kho đang được quản lý bởi S3`
-    );
-    err.code = 'INVENTORY_MANAGED_BY_S3';
-    err.status = 409;
-    throw err;
-  }
-}
 
 async function postImportIn(importOrder = {}, options = {}) {
-  assertLocalInventoryEnabled('nhập kho từ phiếu nhập V45');
   const movement = {
     type: 'IMPORT',
     direction: 'IN',
@@ -38,7 +22,6 @@ async function postImportIn(importOrder = {}, options = {}) {
 
 
 async function postSalesOrdersBulkOut(orders = [], options = {}) {
-  assertLocalInventoryEnabled('xuất kho hàng loạt theo đơn bán V45');
   if (!options.session && options.allowUnsafeNoSession !== true) {
     const err = new Error('postSalesOrdersBulkOut cần chạy trong Mongo session để đảm bảo atomic inventory posting');
     err.code = 'INVENTORY_SESSION_REQUIRED';
@@ -58,7 +41,6 @@ async function postSalesOrdersBulkOut(orders = [], options = {}) {
 }
 
 async function postSaleOut(order = {}, options = {}) {
-  assertLocalInventoryEnabled('xuất kho theo đơn bán V45');
   if (!options.session && options.allowUnsafeNoSession !== true) {
     const err = new Error('postSaleOut cần chạy trong Mongo session để đảm bảo atomic inventory posting');
     err.code = 'INVENTORY_SESSION_REQUIRED';
@@ -78,7 +60,6 @@ async function postSaleOut(order = {}, options = {}) {
 
 
 async function postSaleEditDelta(order = {}, items = [], direction = 'OUT', options = {}) {
-  assertLocalInventoryEnabled('điều chỉnh tồn do sửa đơn bán V45');
   if (!options.session && options.allowUnsafeNoSession !== true) {
     const err = new Error('postSaleEditDelta cần chạy trong Mongo session để đảm bảo atomic inventory posting');
     err.code = 'INVENTORY_SESSION_REQUIRED';
@@ -108,7 +89,6 @@ async function postSaleEditDelta(order = {}, items = [], direction = 'OUT', opti
 }
 
 async function postReturnIn(returnOrder = {}, options = {}) {
-  assertLocalInventoryEnabled('nhập kho hàng trả trên V45');
   return inventoryService.postStockMovement(returnOrder, {
     type: 'RETURN',
     direction: 'IN',
@@ -121,12 +101,10 @@ async function postReturnIn(returnOrder = {}, options = {}) {
 }
 
 async function reverseMovement(document = {}, movement = {}, options = {}) {
-  assertLocalInventoryEnabled('đảo giao dịch tồn kho trên V45');
   return inventoryService.reverseStockMovement(document, movement, options);
 }
 
 async function reconcileInventory(options = {}) {
-  assertLocalInventoryEnabled('rebuild/đối soát ghi tồn kho V45');
   return inventoryService.rebuildCurrentInventoryFromTransactions(options);
 }
 
@@ -137,6 +115,5 @@ module.exports = {
   postSaleEditDelta,
   postReturnIn,
   reverseMovement,
-  reconcileInventory,
-  assertLocalInventoryEnabled
+  reconcileInventory
 };

@@ -12,7 +12,6 @@ const ReturnOrder = require('../../models/ReturnOrder');
 const MobileLog = require('../../models/MobileLog');
 const InventoryPostingService = require('../../domain/posting/InventoryPostingService');
 const SalesOrderDeletionService = require('../../domain/lifecycle/SalesOrderDeletionService');
-const { assertLocalOrderEnabled } = require('../../domain/integration/S3ExecutionGuard');
 const inventoryStockService = require('../inventoryStock.service');
 const internalSaleAllocationService = require('../internalSaleAllocation.service');
 const { createStepTimer, getIdempotencyKey, readIdempotentResult, rememberIdempotentResult } = require('../../utils/mobilePerformance.util');
@@ -582,7 +581,6 @@ function createMobileSalesService(ctx) {
   // MOBILE_SALES_OWNERSHIP_NO_GENERIC_STAFF_END
 
   async function createSalesOrder({ body = {}, mobileUser }) {
-    assertLocalOrderEnabled('tạo đơn bán từ app trên V45');
     const customerKeysForIdem = customerLookupKeysFromOrderBody(body);
     const idemKey = getIdempotencyKey(body, ['sales-create', mobileUser && (mobileUser.id || mobileUser.code), body.customerCode || customerKeysForIdem[0] || '', Array.isArray(body.items) ? body.items.length : 0]);
     const cachedResult = readIdempotentResult(idemKey);
@@ -911,7 +909,6 @@ function createMobileSalesService(ctx) {
   }
 
   async function updateSalesOrder({ params = {}, body = {}, mobileUser }) {
-    assertLocalOrderEnabled('sửa nội dung đơn bán từ app trên V45');
     const idemKey = getIdempotencyKey(body, ['sales-update', mobileUser && (mobileUser.id || mobileUser.code), params.id]);
     const cachedResult = readIdempotentResult(idemKey);
     if (cachedResult) return cachedResult;
@@ -1209,7 +1206,6 @@ function createMobileSalesService(ctx) {
   }
 
   async function deleteSalesOrder({ params = {}, mobileUser }) {
-    assertLocalOrderEnabled('xóa đơn bán nguồn từ app trên V45');
     const owner = mobileSalesOwnerMongoFilter(mobileUser);
     if (!owner) return fail(403, 'Không xác định được nhân viên bán hàng');
 

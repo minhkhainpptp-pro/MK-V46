@@ -12,7 +12,6 @@ const { STOCK_WAREHOUSE_CODE, STOCK_WAREHOUSE_NAME } = require('../constants/bus
 const inventoryStockService = require('./inventoryStock.service');
 const { assertDestructiveInventoryOperation } = require('../utils/inventoryMaintenance.util');
 const InventoryRebuildService = require('../domain/reconciliation/InventoryRebuildService');
-const { assertLocalInventoryEnabled } = require('../domain/integration/S3ExecutionGuard');
 
 function dateOnly(value) { return dateUtil.toDateOnly(value || dateUtil.todayVN()); }
 function isActive(row = {}) { return !['void', 'cancelled', 'canceled', 'deleted'].includes(String(row.status || '').toLowerCase()); }
@@ -143,7 +142,6 @@ async function getSnapshot(productLike = {}) {
 }
 
 async function normalizeProductInventoryToMain({ productCode, productId, session = null } = {}) {
-  assertLocalInventoryEnabled('chuẩn hóa tồn sản phẩm về kho MAIN trên V45');
   const code = normalizeStockProductCode(productCode || '');
   const id = String(productId || '').trim();
   const numericCode = numericCodeVariant(code);
@@ -304,7 +302,6 @@ async function applyAtomicInventoryDelta({
 }
 
 async function postStockMovement(document = {}, movement = {}, options = {}) {
-  assertLocalInventoryEnabled('ghi giao dịch tồn kho trên V45');
   const session = options.session;
   const rawItems = Array.isArray(document.items) ? document.items : [];
   const items = groupStockItems(rawItems);
@@ -634,7 +631,6 @@ async function normalizeBulkSalesInventoryToMain(movements = [], session = null)
 }
 
 async function postStockMovementBulkSalesOut(orders = [], options = {}) {
-  assertLocalInventoryEnabled('xuất kho hàng loạt theo đơn bán V45');
   const session = options.session;
   if (!session && options.allowUnsafeNoSession !== true) {
     const err = new Error('Bulk sales inventory OUT cần Mongo session để đảm bảo atomic');
@@ -814,7 +810,6 @@ async function postStockMovementBulkSalesOut(orders = [], options = {}) {
 }
 
 async function reverseStockMovement(document = {}, movement = {}, options = {}) {
-  assertLocalInventoryEnabled('đảo giao dịch tồn kho trên V45');
   const direction = movement.direction === 'IN' ? 'OUT' : 'IN';
   return postStockMovement(document, {
     ...movement,
@@ -1004,7 +999,6 @@ function findProductInMap(item = {}, productMap = new Map()) {
 }
 
 async function postStockMovementBulkImportIn(document = {}, movement = {}, options = {}) {
-  assertLocalInventoryEnabled('nhập kho hàng loạt trên V45');
   const session = options.session;
   const rawItems = Array.isArray(document.items) ? document.items : [];
   const items = groupStockItems(rawItems);
@@ -1151,7 +1145,6 @@ async function postStockMovementBulkImportIn(document = {}, movement = {}, optio
 }
 
 async function rebuildCurrentInventoryFromTransactions(options = {}) {
-  assertLocalInventoryEnabled('rebuild tồn kho V45');
   assertDestructiveInventoryOperation(options, 'Rebuild inventories từ stockTransactions');
   const result = await InventoryRebuildService.rebuildInventoryFromTransactions(options);
   if (inventoryStockService.invalidateInventorySummaryCache) inventoryStockService.invalidateInventorySummaryCache();
@@ -1265,7 +1258,6 @@ async function buildTransactionsFromDocuments() {
 }
 
 async function rebuildStockLedgerFromDocuments(options = {}) {
-  assertLocalInventoryEnabled('rebuild stock ledger V45');
   assertDestructiveInventoryOperation(options, 'Rebuild stock ledger');
   const resetTransactions = options.resetTransactions === true;
   const beforeTxCount = await StockTransaction.countDocuments({});
@@ -1308,7 +1300,6 @@ async function rebuildStockLedgerFromDocuments(options = {}) {
 }
 
 async function normalizeOneWarehouse(options = {}) {
-  assertLocalInventoryEnabled('chuẩn hóa/điều chỉnh tồn kho V45');
   assertDestructiveInventoryOperation(options, 'Chuẩn hóa tồn về một kho');
   const now = dateUtil.nowIso();
   const transactionResult = await StockTransaction.updateMany({}, {

@@ -13,15 +13,7 @@ const userSchema = new mongoose.Schema({
     default: 'sales'
   },
   staffCode: { type: String, default: '', trim: true },
-  isActive: { type: Boolean, default: true },
-  sourceSystem: { type: String, default: '', trim: true },
-  sourceId: { type: String, default: '', trim: true },
-  sourceVersion: { type: String, default: '', trim: true },
-  sourceUpdatedAt: { type: String, default: '', trim: true },
-  sourceHash: { type: String, default: '', trim: true },
-  sourceSyncRunId: { type: String, default: '', trim: true },
-  sourceActive: { type: Boolean, default: true },
-  sourceReadOnly: { type: Boolean, default: false }
+  isActive: { type: Boolean, default: true }
 }, { timestamps: true, strict: false });
 
 // Index được chuẩn hoá tập trung tại src/services/mongoIndexService.js.

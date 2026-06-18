@@ -3,7 +3,6 @@
 const express = require('express');
 const masterOrderController = require('../controllers/masterOrderController');
 const { requireRole } = require('../middlewares/auth.middleware');
-const { blockMasterOrderSourceWrite } = require('../middlewares/integrationAuthority.middleware');
 
 const router = express.Router();
 const manageMasterOrders = requireRole(['admin', 'manager', 'accountant']);
@@ -19,11 +18,11 @@ router.post('/delivery-today/:id/admin-unlock', requireRole(['admin']), masterOr
 router.patch('/delivery-today/:id', manageMasterOrders, masterOrderController.updateDeliveryTodayOrder);
 router.post('/print-aggregate', viewMasterOrders, masterOrderController.printAggregate);
 router.get('/', viewMasterOrders, masterOrderController.list);
-router.post('/', manageMasterOrders, blockMasterOrderSourceWrite('tạo đơn tổng trên V45'), masterOrderController.create);
+router.post('/', manageMasterOrders, masterOrderController.create);
 router.get('/:id', viewMasterOrders, masterOrderController.get);
-router.put('/:id', manageMasterOrders, blockMasterOrderSourceWrite('sửa thành phần đơn tổng trên V45'), masterOrderController.update);
-router.patch('/:id', manageMasterOrders, blockMasterOrderSourceWrite('sửa thành phần đơn tổng trên V45'), masterOrderController.update);
-router.post('/:id/cancel', manageMasterOrders, blockMasterOrderSourceWrite('hủy đơn tổng nguồn trên V45'), masterOrderController.cancel);
-router.delete('/:id', manageMasterOrders, blockMasterOrderSourceWrite('xóa đơn tổng nguồn trên V45'), masterOrderController.remove);
+router.put('/:id', manageMasterOrders, masterOrderController.update);
+router.patch('/:id', manageMasterOrders, masterOrderController.update);
+router.post('/:id/cancel', manageMasterOrders, masterOrderController.cancel);
+router.delete('/:id', manageMasterOrders, masterOrderController.remove);
 
 module.exports = router;

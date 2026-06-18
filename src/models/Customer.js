@@ -20,15 +20,7 @@ const customerSchema = new mongoose.Schema({
   openingDebt: { type: Number, default: 0 },
   debtLimit: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
-  searchText: { type: String, default: '', trim: true },
-  sourceSystem: { type: String, default: '', trim: true },
-  sourceId: { type: String, default: '', trim: true },
-  sourceVersion: { type: String, default: '', trim: true },
-  sourceUpdatedAt: { type: String, default: '', trim: true },
-  sourceHash: { type: String, default: '', trim: true },
-  sourceSyncRunId: { type: String, default: '', trim: true },
-  sourceActive: { type: Boolean, default: true },
-  sourceReadOnly: { type: Boolean, default: false }
+  searchText: { type: String, default: '', trim: true }
 }, { timestamps: true, strict: false, versionKey: false });
 
 // Index được chuẩn hoá tập trung tại src/services/mongoIndexService.js.

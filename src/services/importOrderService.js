@@ -7,7 +7,6 @@ const productRepository = require('../repositories/productRepository');
 const { makeId, normalizeText, toNumber } = require('../utils/common.util');
 const { withMongoTransaction } = require('../utils/transaction.util');
 const InventoryPostingService = require('../domain/posting/InventoryPostingService');
-const { assertLocalInventoryEnabled } = require('../domain/integration/S3ExecutionGuard');
 const { normalizePickingZone, pickingZoneFrom, legacyPrintGroupCode, PICKING_ZONES } = require('../utils/pickingZone.util');
 const { STOCK_WAREHOUSE_CODE, STOCK_WAREHOUSE_NAME } = require('../constants/business.constants');
 
@@ -174,7 +173,6 @@ async function hydrateItems(rawItems = []) {
 }
 
 async function createImportOrder(body = {}) {
-  assertLocalInventoryEnabled('tạo phiếu nhập kho trên V45');
   const items = await hydrateItems(body.items);
   if (!items.length) return { error: 'Phiếu nhập chưa có dòng hàng', status: 400 };
   const existingOrders = await importOrderRepository.findAll();
@@ -207,7 +205,6 @@ async function createImportOrder(body = {}) {
 }
 
 async function updateImportOrder(id, body = {}) {
-  assertLocalInventoryEnabled('sửa phiếu nhập kho trên V45');
   const current = await importOrderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy phiếu nhập', status: 404 };
   if (String(current.status || 'draft').toLowerCase() === 'posted') {
@@ -243,7 +240,6 @@ async function updateImportOrder(id, body = {}) {
 }
 
 async function postImportOrder(id, actor = {}) {
-  assertLocalInventoryEnabled('post phiếu nhập kho trên V45');
   const startedAt = Date.now();
   const current = await importOrderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy phiếu nhập', status: 404 };
@@ -312,7 +308,6 @@ async function postImportOrder(id, actor = {}) {
 }
 
 async function cancelImportOrder(id, actor = {}) {
-  assertLocalInventoryEnabled('hủy phiếu nhập kho trên V45');
   const current = await importOrderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy phiếu nhập', status: 404 };
   const status = String(current.status || 'draft').toLowerCase();
