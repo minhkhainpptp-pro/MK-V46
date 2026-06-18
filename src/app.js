@@ -138,7 +138,15 @@ function createApp() {
   if (process.env.NODE_ENV !== 'test') {
     app.use(requestLogger);
   }
-  app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '5mb' }));
+  app.use(express.json({
+    limit: process.env.JSON_BODY_LIMIT || '5mb',
+    verify: (req, res, buffer) => {
+      // Preserve exact bytes for S3 HMAC verification. Never log rawBody.
+      if (String(req.originalUrl || req.url || '').startsWith('/api/integrations/s3')) {
+        req.rawBody = Buffer.from(buffer);
+      }
+    }
+  }));
   app.use(express.urlencoded({ extended: true, limit: process.env.URLENCODED_BODY_LIMIT || '1mb', parameterLimit: 2000 }));
 
   // Docs has its own limiter/auth guard inside swaggerRoutes, but this keeps

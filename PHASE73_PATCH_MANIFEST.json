@@ -1,0 +1,470 @@
+{
+  "phase": 73,
+  "baseArchive": "MK-pro-phase72-s3-execution-only-guards-patched(2).zip",
+  "summary": {
+    "added": 86,
+    "modified": 21,
+    "removed": 0,
+    "qualityGate": {
+      "v45Tests": "676/676",
+      "bridgeTests": "10/10",
+      "npmAudit": "0 vulnerabilities"
+    }
+  },
+  "added": [
+    {
+      "path": "PHASE73_COMPLETE_REPORT.md",
+      "sha256": "f9dd2f79a10b0f9d261a2e3b8ca33b4a8e96d12b86b23e100b92cda2936d7a3f"
+    },
+    {
+      "path": "PHASE73_DEPLOYMENT_CHECKLIST.md",
+      "sha256": "f4a3a3d61d1686327e98fc24f09bb514031613d8ea85187c34dc5afd9826af7c"
+    },
+    {
+      "path": "PHASE73_STEP10_GUARDED_RETURN_POST_REPORT.md",
+      "sha256": "8a9df048c525c7853002cb4919a33e7303a76ca9b741250e19e9da480ee2e9cc"
+    },
+    {
+      "path": "PHASE73_STEP11_BRIDGE_AGENT_REPORT.md",
+      "sha256": "7aba068d77b376ee35296c48ea8e30ebc6ec1ed42bc5371b8e0d9d91f8b45d46"
+    },
+    {
+      "path": "PHASE73_STEP11_MASTER_ORDER_BRIDGE_REPORT.md",
+      "sha256": "bce0a9875155988504a79800fc5330413e16089c6e1b64f82de51feac7458fe5"
+    },
+    {
+      "path": "PHASE73_STEP11_RETURN_COMMAND_API_REPORT.md",
+      "sha256": "605ee9b160f7f42b27af479f94e0998b8fab70c9f640348aa725517e9b8f994f"
+    },
+    {
+      "path": "PHASE73_STEP12_RECONCILIATION_MONITORING_REPORT.md",
+      "sha256": "ac08d4aec7be37e4eb69fe1927fbeb561636a586aea8cd99712e2421c6f69f41"
+    },
+    {
+      "path": "PHASE73_STEP14_DEPLOYMENT_ROLLBACK_REPORT.md",
+      "sha256": "51fefb4b2f726629f26ec5a75ac20bbde90fe3de187512b96cff8b1ddca06efc"
+    },
+    {
+      "path": "PHASE73_STEP3_INTEGRATION_FOUNDATION_REPORT.md",
+      "sha256": "ebd5c45b2bba8496a56523b766dd22204aab3ebb70f6e16e8e222249598efaec"
+    },
+    {
+      "path": "PHASE73_STEP4_SOURCE_EXECUTION_MODEL_REPORT.md",
+      "sha256": "84878906500ad998401b501e2d95ed2fdcdaf1ff338a1a6a7984fc7109195d02"
+    },
+    {
+      "path": "PHASE73_STEP5_HMAC_API_BOUNDARY_REPORT.md",
+      "sha256": "13ed49448d715c21f73cf8b52832c635c091ea503c41f1176e7fbfc371dd62bd"
+    },
+    {
+      "path": "PHASE73_STEP6_FULL_SYNC_REPORT.md",
+      "sha256": "dbee3d082b5b4f80313adbe33e56b3bdf94d8c11a695280010a084db13ef13ec"
+    },
+    {
+      "path": "PHASE73_STEP7_MASTER_ORDER_SYNC_REPORT.md",
+      "sha256": "a5ab4b4d828cd4e536b06f784fd8af41adca0575ca5b13493cd4b6146d28104d"
+    },
+    {
+      "path": "PHASE73_STEP8_RETURN_OUTBOX_REPORT.md",
+      "sha256": "7ffe81df2a2667c8982386183070771230fbb34cbf4ace626ce0e91e4df55efc"
+    },
+    {
+      "path": "PHASE73_STEP9_SQL_STAGING_REPORT.md",
+      "sha256": "2f393888a45fc72dd9915bf0f656c12cb4ae8749a1860084522240e06cde2c5b"
+    },
+    {
+      "path": "QUALITY_GATE_RESULTS_PHASE73.txt",
+      "sha256": "b9aabb38dafd51fc6f99ed7732995b7b425084780f548102bc4ff760e1923dfd"
+    },
+    {
+      "path": "integration/s3-bridge/agent/.env.example",
+      "sha256": "d829fde0c6fe46f62037f55d6b2fd1b38e458257f2695f115e0c23a0d5e3070a"
+    },
+    {
+      "path": "integration/s3-bridge/agent/README.md",
+      "sha256": "65effca352763fe020c4f7649d8aa2817d2c9266c3cbb9413f9d8946e66998f1"
+    },
+    {
+      "path": "integration/s3-bridge/agent/deploy/apply-sql-staging.ps1",
+      "sha256": "021332ee19eb4f654bf69894e40f6a61aeb9645d64bcf67646b961b84ed390a4"
+    },
+    {
+      "path": "integration/s3-bridge/agent/deploy/health-check.ps1",
+      "sha256": "45943305c5e7c1a3f8a95b91326c455a375c5de4744bed538cb8606ed51dc500"
+    },
+    {
+      "path": "integration/s3-bridge/agent/deploy/install-service.ps1",
+      "sha256": "ec13830c3c82e509353012dbba8f6e5b2e9c05e579190056b91a8d2307b0f10d"
+    },
+    {
+      "path": "integration/s3-bridge/agent/deploy/probe-s3-contract.ps1",
+      "sha256": "8b7423cbf4343a2324ab90359786fe6024463c9e390ead467010f9f1d4c5a56a"
+    },
+    {
+      "path": "integration/s3-bridge/agent/deploy/rollback.ps1",
+      "sha256": "39bd117bc3c28315681553a0663d9d03c0af51dbe7d2f2f6313aa1bd77007839"
+    },
+    {
+      "path": "integration/s3-bridge/agent/deploy/uninstall-service.ps1",
+      "sha256": "2ca11acbf9f2b539dc378bdb952364f94099f1181d99f0b59cd11c80ed49da86"
+    },
+    {
+      "path": "integration/s3-bridge/agent/package-lock.json",
+      "sha256": "5f94d63ccadde1eeb41677e1937a55fb8fc6bb63c4da98f9f9afff2690c0f390"
+    },
+    {
+      "path": "integration/s3-bridge/agent/package.json",
+      "sha256": "844cf779e5d22f456a53cb55caf27dcc19c7d0a42b3304599bfbdebe8a0d9233"
+    },
+    {
+      "path": "integration/s3-bridge/agent/scripts/health-check.js",
+      "sha256": "646cd2fa54aace4697e0e8e3f4e352a3d67db7b48d55ac928c6b72698006ab19"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/config.js",
+      "sha256": "601ca958316f7863973767e8dafb1a39c840f6be01fd421375346f557e6e4590"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/logger.js",
+      "sha256": "ba66574373a34663ae7efa86c5a4f43faa6a17769d06c488031010ae922b7858"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/main.js",
+      "sha256": "9f5f1bbdfe5b9c1409e9ad110427951d0536c05d1778fc8c90e740f879b9e8c4"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/masterOrderProcessor.js",
+      "sha256": "f3925c0f1910f8560c50019457c3ec0bf05bfd83cbfa8a2f564121ebd0ebbd80"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/returnProcessor.js",
+      "sha256": "1b3d5abcc4e5de59e9d810ed1463021d3e52662d367ad959945f72cc1782b9ab"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/signature.js",
+      "sha256": "d7d197f35b8593a1cd7456450e7520aa42c6c4895e2721ffe6153d2e06f8f39f"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/sqlMasterOrderRepository.js",
+      "sha256": "581f3ec7979145165efd79df09f981e77398a81f9984483bfd3c6441d892e47b"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/sqlPoolProvider.js",
+      "sha256": "8416301cdd8fb0b19aafdd01c8f06cbf80a8e0e6422705e2bae8afbe1f1338c6"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/sqlReturnRepository.js",
+      "sha256": "f4ca4273806e57bbb41e66cb4065b6e0ade91f280eabb15b89e8aa6201f9f0db"
+    },
+    {
+      "path": "integration/s3-bridge/agent/src/v45Client.js",
+      "sha256": "9c4caca18b994ce3fde096cba6ff3e33306d45dc6f335092e5117c628fff0c7c"
+    },
+    {
+      "path": "integration/s3-bridge/agent/test/masterOrderProcessor.test.js",
+      "sha256": "4509e26ad33397fe7493bde277e9b511ec5868bf73e209a51a898e50eddbc989"
+    },
+    {
+      "path": "integration/s3-bridge/agent/test/returnProcessor.test.js",
+      "sha256": "ef109baa5a62073f6d200180bce63915c2151c0492e614c72df5ebf255e353d2"
+    },
+    {
+      "path": "integration/s3-bridge/agent/test/signature.test.js",
+      "sha256": "76029b4c22fd08db3af98637721d413cb68e471540e9c25390366838f2b0b56f"
+    },
+    {
+      "path": "integration/s3-bridge/agent/test/v45Client.test.js",
+      "sha256": "e59d71add75c1b70d38f9ec0e7d09945aa59ecb20606c2fe5d99166e66207275"
+    },
+    {
+      "path": "integration/s3-bridge/sql/001_create_schema.sql",
+      "sha256": "00077cbc21919b4420a48f97e225c073bd8cba2a348310c3938512cd904eb6a0"
+    },
+    {
+      "path": "integration/s3-bridge/sql/002_create_staging_tables.sql",
+      "sha256": "00024855fb4a4b3f337e19189d0d52701364e725c80642fa8a64f69cb1ddb6f1"
+    },
+    {
+      "path": "integration/s3-bridge/sql/003_create_staging_procedures.sql",
+      "sha256": "d5f5bb2c014f7f7976a32f3e02372402b295d1c4431cadc220bbc8f95db91246"
+    },
+    {
+      "path": "integration/s3-bridge/sql/004_create_roles_and_permissions.sql",
+      "sha256": "a35af32bf2f7f4b1e483880d2e36556e2078ef4f098709e87b1417c2a2d1b02e"
+    },
+    {
+      "path": "integration/s3-bridge/sql/005_verify_staging.sql",
+      "sha256": "c2615bcf6414ec93dbefb8e929c974bc91df6066c64eb77601ea36bc004cdb35"
+    },
+    {
+      "path": "integration/s3-bridge/sql/006_probe_s3_contract.sql",
+      "sha256": "1ce5f5465270e7b81da98b4f5be6948a0e7dc76516b3931b8f0881c343b30d42"
+    },
+    {
+      "path": "integration/s3-bridge/sql/010_create_guarded_return_orchestrator.sql",
+      "sha256": "203683d8c6a390c609565e7ebe0f33ac436c3f6c1248e45e7baca23174b12be7"
+    },
+    {
+      "path": "integration/s3-bridge/sql/011_harden_bridge_permissions.sql",
+      "sha256": "cb4f0a3bbc3c49e0088e1db49873495189df05eb0b67a060a797676488adecd4"
+    },
+    {
+      "path": "integration/s3-bridge/sql/012_core_adapter_implementation_template.sql",
+      "sha256": "399d08169ef05ea2181875503551728d5b3ef5b29ffbbc17f8deecae7c0637f8"
+    },
+    {
+      "path": "integration/s3-bridge/sql/020_create_master_order_read_contract.sql",
+      "sha256": "a3ee238a197ddcf2bfa9248b00b99a04fe67ef4ef7395f1a9d26bd3650a13bdd"
+    },
+    {
+      "path": "integration/s3-bridge/sql/021_master_order_adapter_template.sql",
+      "sha256": "d58b8a612a72f2ae74378101f33b05f4a3d0732518440b25d53c7fe9fd5dc250"
+    },
+    {
+      "path": "integration/s3-bridge/sql/099_disable_integration.sql",
+      "sha256": "afbf101f4dd8f64b8c13e369dc096d062b42b62304df0298d9dddca219bf4ccb"
+    },
+    {
+      "path": "integration/s3-bridge/sql/README.md",
+      "sha256": "ddd67d5ca98809a19af5845b4def07c3092aefcbeadb2d24edf8033149b78dd6"
+    },
+    {
+      "path": "src/controllers/s3IntegrationController.js",
+      "sha256": "7ee6765eef53729078296c4937c1de0d31aa0bb5d96425a92ca41612159f9b1b"
+    },
+    {
+      "path": "src/middlewares/s3IntegrationAuth.middleware.js",
+      "sha256": "224cf01587ad4f6f7f2985635e648f3e11caeb65a2d28f5573515978995044ca"
+    },
+    {
+      "path": "src/models/IntegrationInbox.js",
+      "sha256": "a5c3abca76d8424f565ace0ff05961b7371d74bcf56b0aafddaea8806d330f86"
+    },
+    {
+      "path": "src/models/IntegrationOutbox.js",
+      "sha256": "5ba670330bb9a6b41cd56d788b5b170ba7540a8943bb00e9431869ec3d79f285"
+    },
+    {
+      "path": "src/models/S3IntegrationError.js",
+      "sha256": "93951fc9dbae647e2910adf2e9461cfb76c872a13bec4e041ded66e3c739782a"
+    },
+    {
+      "path": "src/models/S3IntegrationNonce.js",
+      "sha256": "e285de27339cd7b1fcc109e06e7056443a58b3439359f2920889244f31dde1f6"
+    },
+    {
+      "path": "src/models/S3InventoryBalance.js",
+      "sha256": "416ecac4c15d07bbad50dcd9427a1af7eab04158d6f1ccc99bc8fd782b95ce62"
+    },
+    {
+      "path": "src/models/S3SyncCheckpoint.js",
+      "sha256": "48729ee435b9f7d3a4079b7c38df24e41933af2cde15ae51607a2af6d55d10d4"
+    },
+    {
+      "path": "src/models/S3SyncRun.js",
+      "sha256": "acc3e533d897e5777aed737aea976dacc822aeea36ab394564931bbfa60933b3"
+    },
+    {
+      "path": "src/routes/s3IntegrationRoutes.js",
+      "sha256": "bfa338790907afd2002414a75690a72647d0e14e7d0f5ffebaff49c7a43a01c2"
+    },
+    {
+      "path": "src/security/s3IntegrationSignature.js",
+      "sha256": "46c8633bc28a8d172708872163474ae56adb97f1221e081597d28ac1c02998fe"
+    },
+    {
+      "path": "src/services/integration/s3/S3FullSyncService.js",
+      "sha256": "e24788810ba2250ae983c8936dbb50462fd4480e76a7abce739dfd2f72900798"
+    },
+    {
+      "path": "src/services/integration/s3/S3MasterOrderSyncService.js",
+      "sha256": "6e55851a3f0478423510c2ef1513588162a78941183776cfeabe64f11e2ea8bc"
+    },
+    {
+      "path": "src/services/integration/s3/S3ReconciliationPolicy.js",
+      "sha256": "53e1a02b0144a103519ca9b971563ad5b0e28cdec2cca23ccb5a1590b50c681e"
+    },
+    {
+      "path": "src/services/integration/s3/S3ReconciliationService.js",
+      "sha256": "3ec04f464318993b0fc2fb785c20857b2cc3dd1f681cba8830a0d3779317bda6"
+    },
+    {
+      "path": "src/services/integration/s3/S3ReturnCommandPolicy.js",
+      "sha256": "3f6e9750ede95235fada2be30952f1e1c93287245b235c6e2d30cc371e42f698"
+    },
+    {
+      "path": "src/services/integration/s3/S3ReturnCommandService.js",
+      "sha256": "3e927596396a6bed12f6531261c7de589727422e5500f58364b561a313f4a85b"
+    },
+    {
+      "path": "src/services/integration/s3/S3ReturnOutboxService.js",
+      "sha256": "b231f1e14c9f12a848c1ae967bf1c9db9704ad19e61ec0c26101d9d27aa21bee"
+    },
+    {
+      "path": "test/s3-full-sync-adapters.test.js",
+      "sha256": "c83fec7cf21cc264bf18aaaf77f5f3664f57fc46e70e50df8635a667e012ca38"
+    },
+    {
+      "path": "test/s3-guarded-auto-post-contract.test.js",
+      "sha256": "6e44e55fc1623b81fd77069f5ecc2ac77ead29ef8eeafceb4304747bbbb6ce0b"
+    },
+    {
+      "path": "test/s3-integration-foundation-models.test.js",
+      "sha256": "7f48b29855f2e27ba65f76fbb5e2d32435c11f9fbb0553de352aeeac0393010e"
+    },
+    {
+      "path": "test/s3-integration-security-boundary-static.test.js",
+      "sha256": "511671b399707406091c55de820cb72872d2f430d5c97d694c258beec51dc827"
+    },
+    {
+      "path": "test/s3-integration-signature.test.js",
+      "sha256": "285ebcbe036ae334e10e34124f412d79d0d43d95adb6988d97115276e1514422"
+    },
+    {
+      "path": "test/s3-master-order-sql-contract.test.js",
+      "sha256": "5c9f212d9ffbd8b9c472ec1bbb21a70989b0ff1767f67011fe20d61b4f5ca80d"
+    },
+    {
+      "path": "test/s3-master-order-sync-policy.test.js",
+      "sha256": "030cce9a2670cce806d7ea277c21d74f7109e51ad2c94cdb6ae89e086f2bc565"
+    },
+    {
+      "path": "test/s3-reconciliation-api-static.test.js",
+      "sha256": "9b00b22ebe610b0b4a08b352cd22d628866c90e165e861b782ea4ebcde9ba526"
+    },
+    {
+      "path": "test/s3-reconciliation-policy.test.js",
+      "sha256": "8ba8c4ba46edf5b41acca3813c8680c41f2cf2e5d7620c2530a597ff2a9c81a9"
+    },
+    {
+      "path": "test/s3-return-command-api-static.test.js",
+      "sha256": "89cc556f4c61e3731746ac02962ba0bd82b8b2a8738a4f995b1b72ed5d66dc00"
+    },
+    {
+      "path": "test/s3-return-command-policy.test.js",
+      "sha256": "d05ac9b31ec8be20579d75207bf2bfaea15884b6d543716b163846caa37f9afe"
+    },
+    {
+      "path": "test/s3-return-outbox-policy.test.js",
+      "sha256": "a0d93a58ee35033f623da39ed7ff3b2fd94a5d83c075a61b4f15111297c2873a"
+    },
+    {
+      "path": "test/s3-source-execution-model-contract.test.js",
+      "sha256": "d06e460f62207361a1f66c5a7da2feb2a2896a716cb1d330dbc567118562d745"
+    },
+    {
+      "path": "test/s3-sql-staging-contract.test.js",
+      "sha256": "16eef63af83e6b38cb7a63bbe3cce83cdb275ee4582a97dd5b64a59403fcaa67"
+    }
+  ],
+  "modified": [
+    {
+      "path": ".env.example",
+      "sha256Before": "008d997bfca6ca46a8bd2fc6c7f97dc750a677460f8ac6b44b506b6ae455a12f",
+      "sha256After": "7aafe9f085d7987854f37a2ef514a51911936b9b2a824f421dd525793739e039"
+    },
+    {
+      "path": ".env.production.example",
+      "sha256Before": "4742986ed63ff1a29dfcb82e189ae6c9199fceb186c15a445c0113cab5619e3c",
+      "sha256After": "45288a4012254e88d69a7c5cacb9e38654fd1664d886371e8953340b24c72215"
+    },
+    {
+      "path": "docs/openapi.json",
+      "sha256Before": "047a455e9ee134d96f53bce60d753efc68bfe8a69dcfcd75f0ea6073a66c7bf8",
+      "sha256After": "765b8bcf9c878edfc249820e099a5164c23ae78103d20bd033104e0d827fd4b7"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256Before": "746d75600f91d91447249237f06b70d4a943519de9b0961af42b5e342f677109",
+      "sha256After": "074536a972ab4a5b083afd3467356343423841792f1342a160e0b793173d0a50"
+    },
+    {
+      "path": "package.json",
+      "sha256Before": "b24a71a3d0aba6a665c7ef5179fbca8a02b21ceddf74db88710fd966842e5451",
+      "sha256After": "e4c4ee869a59194b45b376cf12dfb82f2427116a45b6ca4affc215660f599336"
+    },
+    {
+      "path": "scripts/check-js-syntax.js",
+      "sha256Before": "b4592f09b80f7c0b4b123f77159dbfa383457da28545eb860a151a6c701a262e",
+      "sha256After": "bafd165aa9b5f9ce276b9850aadce9e5f2b0e6b9d4e88c855f4211d731511503"
+    },
+    {
+      "path": "src/app.js",
+      "sha256Before": "27c88d2967e163ae9b1d4787ea4546206072366ae3ae48a19eabe0614a9e896d",
+      "sha256After": "b809de34c56ccb03f6f37baaa378d1a41c73e4a97528c55adb341da564a194e3"
+    },
+    {
+      "path": "src/middlewares/apiSecurity.middleware.js",
+      "sha256Before": "fc993cba86b70d22d645aea6491684ca3fa26bd6f9c0751e84e5748f57f3f795",
+      "sha256After": "65735a2543ece7243c091aca02f82ff22a92589686bf31c3f54a087c11fe2a1c"
+    },
+    {
+      "path": "src/models/Customer.js",
+      "sha256Before": "6afe1447e55e8a9d2df5acf7a2b1374a9f8cb6dded0eb7fffeb4908f9de0030b",
+      "sha256After": "a230ad75a0aec01d06a087897c4a8d4d60c470a3a8ec67cc46e01a44c61e1696"
+    },
+    {
+      "path": "src/models/MasterOrder.js",
+      "sha256Before": "ee937b625f05988c0c5f1dee41dc3afae703292155c37e61eea447c6e1c0bb87",
+      "sha256After": "5c3977cef653d00140db67c7d50cd181c236e4f696016b2c6deff38aedd676e2"
+    },
+    {
+      "path": "src/models/Product.js",
+      "sha256Before": "cd545d78b4d1a9a43feb95f108aad385771d759a147dcb7b4adc012b36f08438",
+      "sha256After": "997dcc1ca195976cbdeb8fbdb17ece9d384f9270bdedb32d457b7f38a03771db"
+    },
+    {
+      "path": "src/models/ReturnOrder.js",
+      "sha256Before": "983193708eb4c8c3ec5d89531eac0eedb98b90c08b4f082ffed6000e7c86b365",
+      "sha256After": "a39de772aaf14e5929c0bac8f55fa059a7cae3456df41f1cf3ad99f9acfe3129"
+    },
+    {
+      "path": "src/models/SalesOrder.js",
+      "sha256Before": "8b32b61c5fbbf9763391a0d0a8f7530bfaa1d41bfcd21be6258f97af2e386dd6",
+      "sha256After": "92118777d7cee6b8a880a66fffc7f096618201d9918767bd0afc375e745d69a5"
+    },
+    {
+      "path": "src/models/User.js",
+      "sha256Before": "99d40257e060117c8fa9a1e838edff4af12f9aa5c9f30eb0bdc11f26333289a7",
+      "sha256After": "bb02ea2d9789f18a31a5528d0326d5d8da334c8f967bca30fdda7b5c580b03b4"
+    },
+    {
+      "path": "src/models/index.js",
+      "sha256Before": "5ec38f9acf61a8060b8216f6dce96cc24a76bea5803a52d4fbfe3e9e01acea2e",
+      "sha256After": "db08bf050d998fae3ae740c61762559ac31fe7ca81301237593060ef5766aaf4"
+    },
+    {
+      "path": "src/routes/index.js",
+      "sha256Before": "0b8877e164ac81cf9af59125303c32c2a0851b0f3240277b4df995f114e0c457",
+      "sha256After": "0e4bafedf11a638f0d3efe71ed076d6ca04dc48163619560399302ea477c5e49"
+    },
+    {
+      "path": "src/services/master-order/masterOrderLegacy.service.js",
+      "sha256Before": "0915e978c2633370ae05843a4cf61a9593029cc36f94ef8347dc7ced361a404f",
+      "sha256After": "547517be28a4a2334d84587314b005145f5d5483e49c1d0a9c08bcfb9f0d86dc"
+    },
+    {
+      "path": "src/services/masterReturnOrderService.js",
+      "sha256Before": "34eeba43a52752030fd4bfd99b8b5b855bac5041e591e27555a71b5f8efd6cf2",
+      "sha256After": "af395217e55380f88e784d0d37de83169b6e188c582af4a88aa5ae35017768ec"
+    },
+    {
+      "path": "src/services/mongoIndexService.js",
+      "sha256Before": "c32329b6b1f7213c9256f53a9b3fd4ed4cbd0c12ae4d865d9abf6fdfdcc74370",
+      "sha256After": "d9bbd09c442f833da02d5da5952e1ac9dba5478f2b813b6c53a4e894d76f2d69"
+    },
+    {
+      "path": "src/services/returnOrderLegacy.service.js",
+      "sha256Before": "2a25de697831ce1aa19070d7a0cd16a0dc88978534e76cf0adb2d33ca7b3e5f7",
+      "sha256After": "08f7f165e6feedbeafbf127fdfa9007b4ec0beeb73137d8ffb2f2f2d31d7094b"
+    },
+    {
+      "path": "test/mongo-index-cleanup-policy.test.js",
+      "sha256Before": "6325158de8b55a571df79d7b559f14a330a5d8087edd27e40e56950e42ab2bbb",
+      "sha256After": "0a9e4b4352b6107a1a4e2fcf954fbc18d9a33dc4e986bc42b8e7211a373fcdb8"
+    }
+  ],
+  "removed": [],
+  "s3BinaryModified": false,
+  "productionAutoPostEnabled": false
+}

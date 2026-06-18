@@ -1,5 +1,7 @@
 'use strict';
 
+const { assertLocalImportEnabled } = require('../domain/integration/S3ExecutionGuard');
+
 const { canonicalizeOperationalStaff } = require('../utils/canonicalStaffWrite.util');
 
 const { normalizeSearchText } = require('../utils/search.util');
@@ -1573,6 +1575,7 @@ async function upsertCustomers(rows = [], options = {}) {
 }
 
 async function importOpeningStock(rows = []) {
+  assertLocalImportEnabled('openingStock', 'import tồn đầu bằng Excel trên V45');
   const shortageReport = [];
   let imported = 0;
   let skipped = 0;
@@ -1658,6 +1661,7 @@ async function importOpeningStock(rows = []) {
 }
 
 async function importImportOrders(rows = []) {
+  assertLocalImportEnabled('importOrders', 'import phiếu nhập kho bằng Excel trên V45');
   let skipped = 0;
   const errors = [];
   const productMap = await preloadProductsByCode(rows);
@@ -1761,6 +1765,7 @@ const groups = groupRows(rows, (r) => `${cleanText(r.documentCode || r.code || r
 }
 
 async function importSalesOrders(rows = [], options = {}) {
+  assertLocalImportEnabled('salesOrders', 'import đơn DMS/Excel trên V45');
   const startedAtMs = Date.now();
   const autoCutStock = Boolean(options.autoCutStock);
   let skipped = 0;
@@ -3777,6 +3782,7 @@ function normalizeImportFiles({ files = [], buffer = null, fileName = '' } = {})
 }
 
 async function buildPreviewFromRows({ type, rows = [], userName = '', importMode = '' } = {}) {
+  assertLocalImportEnabled(type, 'preview import đơn hoặc tồn kho bằng Excel trên V45');
   if (!type) return { error: 'Thiếu loại import', status: 400 };
   if (type === 'salesOrdersS3') type = 'salesOrders';
   if (!Array.isArray(rows) || !rows.length) return { error: 'File Excel không có dữ liệu', status: 400 };
@@ -3801,6 +3807,7 @@ async function buildPreviewFromRows({ type, rows = [], userName = '', importMode
 }
 
 async function preview({ type, files = [], buffer = null, fileName = '', userName = '', importMode = '' }) {
+  assertLocalImportEnabled(type, 'preview import đơn hoặc tồn kho bằng Excel trên V45');
   if (!type) return { error: 'Thiếu loại import', status: 400 };
   if (type === 'salesOrdersS3') type = 'salesOrders';
   const normalizedImportMode = normalizeImportMode(importMode, type);
@@ -3996,6 +4003,7 @@ async function rebuildSelectedSalesOrderPreviewRows(sourceRows = [], { userName 
 }
 
 async function commit({ type, rows, shortageMode = '', sessionId = '', selectedOrderCodes = [], userName = '' }) {
+  assertLocalImportEnabled(type, 'xác nhận import đơn hoặc tồn kho bằng Excel trên V45');
   if (!type) return { error: 'Thiếu loại import', status: 400 };
   if (type === 'salesOrdersS3') type = 'salesOrders';
   if (!sessionId) return { error: 'Bắt buộc xác nhận bằng importSessionId từ bước preview', status: 400 };

@@ -16,6 +16,7 @@ const reportService = require('../reportService');
 const auditService = require('../auditService');
 const postingEngine = require('../../engines/posting.engine');
 const ArPostingService = require('../../domain/posting/ArPostingService');
+const { assertLocalMasterOrderEnabled } = require('../../domain/integration/S3ExecutionGuard');
 const paymentRepository = require('../../repositories/paymentRepository');
 const MongoStore = require('../../models');
 const { makeId, normalizeText, toNumber } = require('../../utils/common.util');
@@ -23,6 +24,10 @@ const { withMongoTransaction } = require('../../utils/transaction.util');
 const { DEBT_ZERO_TOLERANCE, normalizeDebtAmount, hasOpenDebt } = require('../../constants/finance.constants');
 const { normalizeOrderSourceValue } = require('../../utils/orderSource.util');
 const Product = require('../../models/Product');
+const ReturnStateMachine = require('../../domain/lifecycle/ReturnStateMachine');
+const { RETURN_STATES } = ReturnStateMachine;
+const integrationConfig = require('../../config/integrationConfig');
+const S3ReturnOutboxService = require('../integration/s3/S3ReturnOutboxService');
 const { debugLog } = require('../../utils/debug.util');
 const { normalizePickingZone, pickingZoneFrom, legacyPrintGroupCode, pickingZoneLabel, PICKING_ZONES } = require('../../utils/pickingZone.util');
 const {
@@ -1293,7 +1298,26 @@ async function postDeliveryCollectionsAfterAccountingConfirmed(order = {}, optio
     }))
   });
 
-  if (hydratedReturnRows.length) {
+  if (integrationConfig.isS3Execution && hydratedReturnRows.length) {
+    for (const returnRow of hydratedReturnRows) {
+      const currentReturn = await returnOrderRepository.findByIdOrCode(
+        returnRow.id || returnRow.code,
+        { session: options.session }
+      );
+      if (!currentReturn) continue;
+      const currentState = ReturnStateMachine.getReturnState(currentReturn);
+      if (currentState === RETURN_STATES.RECEIVED) {
+        const command = await S3ReturnOutboxService.createReturnCommand({
+          ...currentReturn,
+          accountingConfirmedAt: currentReturn.accountingConfirmedAt || dateUtil.nowIso()
+        }, { session: options.session, correlationId: options.accountingBatchId });
+        const confirmed = S3ReturnOutboxService.accountingConfirmedPatch(currentReturn, {
+          confirmedBy: options.confirmedBy || 'accounting-batch'
+        }, command.event);
+        await returnOrderRepository.upsert(confirmed, options);
+      }
+    }
+  } else if (hydratedReturnRows.length) {
     for (const returnRow of hydratedReturnRows) {
       const amount = returnOrderTotalAmount(returnRow);
       if (amount <= 0) continue;
@@ -1327,7 +1351,7 @@ async function postDeliveryCollectionsAfterAccountingConfirmed(order = {}, optio
       });
       if (entry) posted.push(entry);
     }
-  } else {
+  } else if (!integrationConfig.isS3Execution) {
     const returnAmount = toNumber(
       order.returnAmountFromReturnOrders
       ?? order.syncedReturnAmountFromReturnOrders
@@ -1370,7 +1394,7 @@ async function postDeliveryCollectionsAfterAccountingConfirmed(order = {}, optio
   }
 
   const arReturnPosted = posted.some((row) => String(row?.type || '').toLowerCase() === 'ar_return');
-  if (arReturnPosted && hydratedReturnRows.length) {
+  if (!integrationConfig.isS3Execution && arReturnPosted && hydratedReturnRows.length) {
     const confirmedReturnCodes = await markAccountingReturnOrdersConfirmed(hydratedReturnRows, options);
     debugLog('DEBUG_AR_RETURN', '[AR_RETURN_DEBUG] STEP-12 mark returnOrders confirmed', {
       orderCode: currentOrderCode,
@@ -3516,6 +3540,7 @@ function buildUnclaimedChildOrderFilter(child = {}) {
 }
 
 async function createMasterOrder(body = {}) {
+  assertLocalMasterOrderEnabled('tạo đơn tổng trên V45');
   const startedAt = Date.now();
   const childIds = [...new Set((Array.isArray(body.childOrderIds) ? body.childOrderIds : [])
     .map((value) => String(value || '').trim())
@@ -3650,6 +3675,7 @@ async function createMasterOrder(body = {}) {
 }
 
 async function updateMasterOrder(id, body = {}) {
+  assertLocalMasterOrderEnabled('sửa thành phần đơn tổng trên V45');
   const current = await masterOrderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy đơn tổng', status: 404 };
   const currentStatus = String(current.status || current.deliveryStatus || '').toLowerCase();
@@ -3834,6 +3860,7 @@ async function updateMasterOrder(id, body = {}) {
 }
 
 async function cancelMasterOrder(id, body = {}) {
+  assertLocalMasterOrderEnabled('hủy đơn tổng nguồn trên V45');
   const masterOrder = await masterOrderRepository.findByIdOrCode(id);
   if (!masterOrder) return { error: 'Không tìm thấy đơn tổng', status: 404 };
   const status = String(masterOrder.status || masterOrder.deliveryStatus || '').toLowerCase();
@@ -3876,6 +3903,7 @@ async function cancelMasterOrder(id, body = {}) {
 }
 
 async function deleteMasterOrder(id, body = {}) {
+  assertLocalMasterOrderEnabled('xóa đơn tổng nguồn trên V45');
   const current = await masterOrderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy đơn tổng', status: 404 };
   const children = await orderService.getMasterChildren(current);

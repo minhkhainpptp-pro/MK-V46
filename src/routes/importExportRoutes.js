@@ -3,6 +3,7 @@
 const express = require('express');
 const controller = require('../controllers/importExportController');
 const { requireRole } = require('../middlewares/auth.middleware');
+const { blockManagedImportWrite } = require('../middlewares/integrationAuthority.middleware');
 const {
   uploadImportExcel,
   handleImportUpload,
@@ -25,6 +26,7 @@ importRouter.post(
   rejectLargeUploadByContentLength,
   handleImportUpload(uploadImportExcel.fields(multiExcelFields)),
   validateUploadedExcelFiles,
+  blockManagedImportWrite('preview/import đơn hoặc tồn kho bằng Excel trên V45'),
   controller.previewImport
 );
 
@@ -33,7 +35,7 @@ importRouter.post('/direct', controller.directImport);
 
 importRouter.get('/sessions/:sessionId/rows', controller.sessionRows);
 importRouter.get('/sessions/:sessionId', controller.sessionStatus);
-importRouter.post('/commit', controller.commitImport);
+importRouter.post('/commit', blockManagedImportWrite('xác nhận import đơn hoặc tồn kho bằng Excel trên V45'), controller.commitImport);
 importRouter.get('/logs', controller.importLogs);
 
 // Import templates

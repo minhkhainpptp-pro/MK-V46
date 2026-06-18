@@ -16,6 +16,9 @@ const PUBLIC_ROUTES = [
   ['GET', /^\/api\/health$/],
   ['GET', /^\/api\/health\/db$/],
 
+  // S3 Bridge uses a dedicated HMAC + nonce boundary.
+  ['*', /^\/api\/integrations\/s3(?:\/|$)/],
+
   // Swagger tự có docsAuthGuard riêng
   ['GET', /^\/api\/docs(?:\/openapi\.json)?$/]
 ];
@@ -28,7 +31,7 @@ function isPublicRoute(req) {
   const path = getRequestPath(req);
 
   return PUBLIC_ROUTES.some(([method, pattern]) => {
-    return req.method === method && pattern.test(path);
+    return (method === '*' || req.method === method) && pattern.test(path);
   });
 }
 

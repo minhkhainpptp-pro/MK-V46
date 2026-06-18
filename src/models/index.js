@@ -50,5 +50,12 @@ module.exports = {
   dmsInventoryImports: require('./DmsInventoryImport'),
   dmsInventorySnapshots: require('./DmsInventorySnapshot'),
   internalSaleAllocations: require('./InternalSaleAllocation'),
-  internalSaleAllocationLedgers: require('./InternalSaleAllocationLedger')
+  internalSaleAllocationLedgers: require('./InternalSaleAllocationLedger'),
+  integrationInboxes: require('./IntegrationInbox'),
+  integrationOutboxes: require('./IntegrationOutbox'),
+  s3SyncCheckpoints: require('./S3SyncCheckpoint'),
+  s3SyncRuns: require('./S3SyncRun'),
+  s3InventoryBalances: require('./S3InventoryBalance'),
+  s3IntegrationErrors: require('./S3IntegrationError'),
+  s3IntegrationNonces: require('./S3IntegrationNonce')
 };

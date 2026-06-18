@@ -3,6 +3,46 @@
 const MongoStore = require('../models');
 
 const INDEX_DEFINITIONS = {
+  integrationInboxes: [
+    [{ eventId: 1 }, { name: 'uniq_integration_inbox_event_id', unique: true }],
+    [{ sourceSystem: 1, sourceEntityType: 1, sourceEntityId: 1, sourceVersion: 1 }, { name: 'idx_integration_inbox_source_entity_version' }],
+    [{ status: 1, receivedAt: 1 }, { name: 'idx_integration_inbox_status_received' }],
+    [{ correlationId: 1 }, { name: 'idx_integration_inbox_correlation', sparse: true }]
+  ],
+  integrationOutboxes: [
+    [{ eventId: 1 }, { name: 'uniq_integration_outbox_event_id', unique: true }],
+    [{ status: 1, nextAttemptAt: 1 }, { name: 'idx_integration_outbox_status_next_attempt' }],
+    [{ status: 1, leaseUntil: 1 }, { name: 'idx_integration_outbox_status_lease' }],
+    [{ aggregateType: 1, aggregateId: 1 }, { name: 'idx_integration_outbox_aggregate' }],
+    [{ destinationSystem: 1, eventType: 1, status: 1 }, { name: 'idx_integration_outbox_destination_event_status' }],
+    [{ correlationId: 1 }, { name: 'idx_integration_outbox_correlation', sparse: true }]
+  ],
+  s3SyncCheckpoints: [
+    [{ stream: 1 }, { name: 'uniq_s3_sync_checkpoint_stream', unique: true }],
+    [{ lastSuccessfulAt: -1 }, { name: 'idx_s3_sync_checkpoint_success' }]
+  ],
+  s3SyncRuns: [
+    [{ runId: 1 }, { name: 'uniq_s3_sync_run_id', unique: true }],
+    [{ status: 1, startedAt: -1 }, { name: 'idx_s3_sync_run_status_started' }],
+    [{ syncMode: 1, startedAt: -1 }, { name: 'idx_s3_sync_run_mode_started' }]
+  ],
+  s3InventoryBalances: [
+    [{ productCode: 1, siteId: 1 }, { name: 'uniq_s3_inventory_product_site', unique: true }],
+    [{ siteId: 1, active: 1, productCode: 1 }, { name: 'idx_s3_inventory_site_active_product' }],
+    [{ snapshotAt: -1 }, { name: 'idx_s3_inventory_snapshot_at' }],
+    [{ syncRunId: 1 }, { name: 'idx_s3_inventory_sync_run', sparse: true }]
+  ],
+  s3IntegrationErrors: [
+    [{ errorId: 1 }, { name: 'uniq_s3_integration_error_id', unique: true }],
+    [{ status: 1, severity: 1, lastOccurredAt: -1 }, { name: 'idx_s3_integration_error_status_severity' }],
+    [{ eventId: 1 }, { name: 'idx_s3_integration_error_event', sparse: true }],
+    [{ entityType: 1, entityId: 1, status: 1 }, { name: 'idx_s3_integration_error_entity_status' }],
+    [{ retryable: 1, status: 1, nextAttemptAt: 1 }, { name: 'idx_s3_integration_error_retry_queue' }]
+  ],
+  s3IntegrationNonces: [
+    [{ agentId: 1, nonce: 1 }, { name: 'uniq_s3_integration_agent_nonce', unique: true }],
+    [{ expiresAt: 1 }, { name: 'ttl_s3_integration_nonce_expiry', expireAfterSeconds: 0 }]
+  ],
   products: [
     [{ code: 1 }, { name: 'uniq_products_code', unique: true, partialFilterExpression: { code: { $type: 'string', $gt: '' } } }],
     [{ barcode: 1 }, { name: 'idx_products_barcode', sparse: true }],
@@ -41,7 +81,20 @@ const INDEX_DEFINITIONS = {
     [{ masterOrderCode: 1 }, { name: 'idx_orders_master_order_code', sparse: true }],
     [{ source: 1, orderDate: -1, status: 1 }, { name: 'idx_orders_source_order_date_status', sparse: true }],
     [{ vatInvoiceRequired: 1, orderDate: -1, status: 1 }, { name: 'idx_orders_vat_required_order_date_status' }],
-    [{ accountingStatus: 1, orderDate: -1, salesStaffCode: 1 }, { name: 'idx_orders_dashboard_accounting_date_staff' }]
+    [{ accountingStatus: 1, orderDate: -1, salesStaffCode: 1 }, { name: 'idx_orders_dashboard_accounting_date_staff' }],
+    [
+      { sourceSystem: 1, sourceOrderId: 1 },
+      {
+        name: 'uniq_orders_source_order',
+        unique: true,
+        partialFilterExpression: {
+          sourceSystem: 'S3',
+          sourceOrderId: { $type: 'string', $gt: '' }
+        }
+      }
+    ],
+    [{ sourceMasterOrderId: 1, executionStatus: 1 }, { name: 'idx_orders_source_master_execution', sparse: true }],
+    [{ syncConflict: 1, executionStatus: 1, sourceUpdatedAt: -1 }, { name: 'idx_orders_sync_conflict_execution' }]
   ],
   masterOrders: [
     [{ id: 1 }, { name: 'uniq_masterOrders_id', unique: true, sparse: true }],
@@ -52,7 +105,20 @@ const INDEX_DEFINITIONS = {
     [{ childOrderIds: 1 }, { name: 'idx_master_orders_child_order_ids' }],
     [{ 'children.id': 1 }, { name: 'idx_master_orders_children_id' }],
     [{ 'children.code': 1 }, { name: 'idx_master_orders_children_code' }],
-    [{ deliveryDate: -1, createdAt: -1 }, { name: 'idx_master_orders_delivery_date_created_at' }]
+    [{ deliveryDate: -1, createdAt: -1 }, { name: 'idx_master_orders_delivery_date_created_at' }],
+    [
+      { sourceSystem: 1, sourceMasterOrderId: 1 },
+      {
+        name: 'uniq_master_orders_source_master',
+        unique: true,
+        partialFilterExpression: {
+          sourceSystem: 'S3',
+          sourceMasterOrderId: { $type: 'string', $gt: '' }
+        }
+      }
+    ],
+    [{ executionStatus: 1, deliveryStaffCode: 1, deliveryDate: -1 }, { name: 'idx_master_orders_execution_staff_date' }],
+    [{ syncConflict: 1, executionStatus: 1, sourceUpdatedAt: -1 }, { name: 'idx_master_orders_sync_conflict_execution' }]
   ],
   importOrders: [
     [{ id: 1 }, { name: 'idx_import_orders_id' }],
@@ -79,7 +145,10 @@ const INDEX_DEFINITIONS = {
     [{ returnMergeStatus: 1, date: 1 }, { name: 'idx_return_orders_merge_date' }],
     [{ createdAt: -1 }, { name: 'idx_return_orders_created_at' }],
     [{ deliveryDate: -1, deliveryStaffCode: 1 }, { name: 'idx_return_orders_delivery_staff_date_desc' }],
-    [{ accountingStatus: 1, returnDate: -1, salesStaffCode: 1 }, { name: 'idx_return_dashboard_accounting_date_staff' }]
+    [{ accountingStatus: 1, returnDate: -1, salesStaffCode: 1 }, { name: 'idx_return_dashboard_accounting_date_staff' }],
+    [{ s3SyncStatus: 1, s3SyncRequestedAt: 1 }, { name: 'idx_return_orders_s3_sync_queue' }],
+    [{ s3SyncEventId: 1 }, { name: 'uniq_return_orders_s3_sync_event', unique: true, sparse: true }],
+    [{ s3ReceiptCode: 1 }, { name: 'idx_return_orders_s3_receipt_code', sparse: true }]
   ],
   masterReturnOrders: [
     [{ id: 1 }, { name: 'uniq_master_return_orders_id', unique: true, partialFilterExpression: { id: { $type: 'string', $gt: '' } } }],

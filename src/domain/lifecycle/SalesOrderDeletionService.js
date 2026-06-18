@@ -10,6 +10,7 @@ const deletionRepository = require('../../repositories/salesOrderDeletion.reposi
 const InventoryPostingService = require('../posting/InventoryPostingService');
 const returnOrderService = require('../../services/returnOrderService');
 const internalSaleAllocationService = require('../../services/internalSaleAllocation.service');
+const { assertLocalOrderEnabled } = require('../integration/S3ExecutionGuard');
 
 const {
   decideSalesOrderDeletion,
@@ -24,6 +25,7 @@ function actorFromCommand(command = {}) {
 }
 
 async function deleteSalesOrder(idOrCode, command = {}) {
+  assertLocalOrderEnabled('xóa đơn bán nguồn trên V45');
   const order = await orderRepository.findByIdOrCode(idOrCode);
 
   if (!order) {

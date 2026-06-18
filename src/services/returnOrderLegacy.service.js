@@ -15,6 +15,8 @@ const auditService = require('./auditService');
 const ReturnOrder = require('../models/ReturnOrder');
 const ReturnStateMachine = require('../domain/lifecycle/ReturnStateMachine');
 const { RETURN_STATES } = ReturnStateMachine;
+const integrationConfig = require('../config/integrationConfig');
+const S3ReturnOutboxService = require('./integration/s3/S3ReturnOutboxService');
 
 const {
   pickSalesStaffCode,
@@ -83,6 +85,12 @@ function hasPositiveReturnValue(row = {}) {
 // AR-RETURN chỉ được ghi sau khi kế toán xác nhận phiếu trả.
 // Nhận kho chỉ cộng tồn, không tự ghi công nợ.
 async function postReturnOrderArIfNeeded(returnOrder = {}, options = {}) {
+  if (integrationConfig.isS3Execution) {
+    const err = new Error('AR-RETURN chính thức được quản lý bởi S3 trong chế độ thực thi');
+    err.code = 'RETURN_AR_MANAGED_BY_S3';
+    err.status = 409;
+    throw err;
+  }
   const amount = getReturnOrderValue(returnOrder);
   if (!returnOrder || amount <= 0) return { entry: null, returnOrder };
 
@@ -652,6 +660,22 @@ async function createReturnOrder(body = {}) {
   if (built.error) return built;
   const { returnOrder, existing } = built;
 
+  if (integrationConfig.isS3Execution) {
+    const pending = {
+      ...returnOrder,
+      ...ReturnStateMachine.patchForState(returnOrder, RETURN_STATES.WAITING_RECEIVE),
+      returnState: RETURN_STATES.WAITING_RECEIVE,
+      stockPosted: false,
+      stockPostedAt: '',
+      arPosted: false,
+      arPostedAt: '',
+      s3SyncStatus: 'not_requested',
+      updatedAt: dateUtil.nowIso()
+    };
+    await returnOrderRepository.upsert(pending);
+    return { returnOrder: toClient(pending), updatedExisting: Boolean(existing) };
+  }
+
   let finalReturnOrder = null;
   await withMongoTransaction(async (session) => {
     // Legacy createReturnOrder vẫn giữ hành vi cũ: tạo phiếu, nhập kho và ghi AR ngay.
@@ -888,6 +912,19 @@ async function confirmReceiveReturnOrderInSession(idOrCode, options = {}) {
     updatedAt: dateUtil.nowIso()
   };
 
+  if (integrationConfig.isS3Execution) {
+    const executionReceived = {
+      ...received,
+      stockPosted: false,
+      stockPostedAt: '',
+      stockReceiveStatus: 'pending_s3',
+      warehouseStatus: 'verified',
+      s3SyncStatus: received.s3SyncStatus || 'not_requested'
+    };
+    await returnOrderRepository.upsert(executionReceived, { session });
+    return { returnOrder: toClient(executionReceived), alreadyReceived: false };
+  }
+
   await returnOrderRepository.upsert(received, { session });
   await InventoryPostingService.postReturnIn(received, { session });
   return { returnOrder: toClient(received), alreadyReceived: false };
@@ -903,8 +940,46 @@ async function confirmReceiveReturnOrder(idOrCode, options = {}) {
 }
 
 async function confirmAccountingReturnOrder(idOrCode, body = {}, options = {}) {
-  const current = await returnOrderRepository.findByIdOrCode(idOrCode);
+  const current = await returnOrderRepository.findByIdOrCode(idOrCode, { session: options.session });
   if (!current) return { error: 'Không tìm thấy phiếu trả hàng', status: 404 };
+
+  const currentState = ReturnStateMachine.getReturnState(current);
+  if (integrationConfig.isS3Execution) {
+    if (!integrationConfig.s3ReturnSyncEnabled) {
+      return { error: 'Đồng bộ hàng trả sang S3 chưa được bật', code: 'S3_RETURN_SYNC_DISABLED', status: 503 };
+    }
+    if (currentState === RETURN_STATES.ACCOUNTING_CONFIRMED && current.s3SyncEventId) {
+      return { returnOrder: toClient(current), alreadyConfirmed: true };
+    }
+    try {
+      ReturnStateMachine.assertCanConfirmAccounting(current);
+    } catch (err) {
+      return { error: err.message, code: err.code, status: 400 };
+    }
+
+    let confirmedReturnOrder = null;
+    const work = async (session) => {
+      const fresh = await returnOrderRepository.findByIdOrCode(idOrCode, { session });
+      if (!fresh) {
+        const err = new Error('Không tìm thấy phiếu trả hàng trong transaction');
+        err.code = 'RETURN_ORDER_NOT_FOUND';
+        err.status = 404;
+        throw err;
+      }
+      const command = await S3ReturnOutboxService.createReturnCommand({
+        ...fresh,
+        accountingConfirmedAt: fresh.accountingConfirmedAt || dateUtil.nowIso(),
+        accountingNote: body.note || fresh.accountingNote || ''
+      }, { session, correlationId: body.correlationId });
+      confirmedReturnOrder = S3ReturnOutboxService.accountingConfirmedPatch(fresh, body, command.event);
+      ReturnStateMachine.assertTransition(fresh, RETURN_STATES.ACCOUNTING_CONFIRMED, 'confirm_accounting_s3');
+      await returnOrderRepository.upsert(confirmedReturnOrder, { session });
+    };
+
+    if (options.session) await work(options.session);
+    else await withMongoTransaction(work);
+    return { returnOrder: toClient(confirmedReturnOrder), queuedForS3: true };
+  }
 
   try {
     ReturnStateMachine.assertCanConfirmAccounting(current);

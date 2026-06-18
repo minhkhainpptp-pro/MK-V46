@@ -2,6 +2,7 @@
 
 const InventoryPostingService = require('../posting/InventoryPostingService');
 const ArPostingService = require('../posting/ArPostingService');
+const { assertLocalOrderEnabled } = require('../integration/S3ExecutionGuard');
 
 function getOrderService() {
   // Lazy require để tránh tạo vòng phụ thuộc khi các route/service mới dần chuyển sang lifecycle boundary.
@@ -30,6 +31,7 @@ function isArPosted(order = {}) {
 }
 
 async function createOrder(body = {}, options = {}) {
+  assertLocalOrderEnabled('tạo đơn bán trên V45');
   const result = await getOrderService().createOrder(body, options);
   if (result && result.error) return result;
 
@@ -44,10 +46,12 @@ async function createOrder(body = {}, options = {}) {
 }
 
 async function updateOrder(idOrCode, body = {}, options = {}) {
+  assertLocalOrderEnabled('sửa nội dung đơn bán trên V45');
   return getOrderService().updateOrder(idOrCode, body, options);
 }
 
 async function cancelOrder(idOrCode, body = {}, options = {}) {
+  assertLocalOrderEnabled('hủy đơn bán nguồn trên V45');
   const result = await getOrderService().cancelOrder(idOrCode, body, options);
   if (result && result.error) return result;
 

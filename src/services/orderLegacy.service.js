@@ -16,6 +16,7 @@ const queryGuard = require('../utils/queryGuard.util');
 const tx = require('../utils/transaction.util');
 const { normalizeOrderSourceValue, applyOrderSourceFields } = require('../utils/orderSource.util');
 const InventoryPostingService = require('../domain/posting/InventoryPostingService');
+const { assertLocalOrderEnabled } = require('../domain/integration/S3ExecutionGuard');
 const postingEngine = require('../engines/posting.engine');
 const returnOrderService = require('./returnOrderService');
 const promotionService = require('./promotionService');
@@ -1075,6 +1076,7 @@ async function listOrders(query = {}) {
 }
 
 async function createOrder(body = {}, actor = {}) {
+  assertLocalOrderEnabled('tạo đơn bán trên V45');
   const startedAt = Date.now();
   const customer = await resolveCustomer(body);
   const staff = await resolveStaff(body);
@@ -1172,6 +1174,7 @@ async function createOrder(body = {}, actor = {}) {
 }
 
 async function updateOrder(id, body = {}) {
+  assertLocalOrderEnabled('sửa nội dung đơn bán trên V45');
   const current = await orderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy đơn bán', status: 404 };
   if (current.masterOrderId || current.mergeStatus === 'merged') return { error: 'Đơn đã gộp, không nên sửa trực tiếp đơn con', status: 400 };
@@ -1271,6 +1274,7 @@ async function updateVatInvoiceSetting(id, body = {}, actor = {}) {
 }
 
 async function cancelOrder(id, body = {}) {
+  assertLocalOrderEnabled('hủy đơn bán nguồn trên V45');
   const current = await orderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy đơn bán', status: 404 };
   const returnDraftCancel = await returnOrderService.cancelReturnDraftForSalesOrder(current, { dryRun: true });
@@ -1305,6 +1309,7 @@ async function cancelOrder(id, body = {}) {
 
 
 async function deleteOrder(id, body = {}) {
+  assertLocalOrderEnabled('xóa đơn bán nguồn trên V45');
   const current = await orderRepository.findByIdOrCode(id);
   if (!current) return { error: 'Không tìm thấy đơn bán', status: 404 };
   const returnDraftDelete = await returnOrderService.cancelReturnDraftForSalesOrder(current, { dryRun: true });

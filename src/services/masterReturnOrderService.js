@@ -9,6 +9,7 @@ const { makeId, normalizeText, toNumber } = require('../utils/common.util');
 const { withMongoTransaction } = require('../utils/transaction.util');
 const returnOrderService = require('./returnOrderService');
 const ReturnStateMachine = require('../domain/lifecycle/ReturnStateMachine');
+const integrationConfig = require('../config/integrationConfig');
 const { RETURN_STATES } = ReturnStateMachine;
 const { pickDeliveryStaffCode, pickDeliveryStaffName } = require('../domain/staff/staffIdentity');
 const MongoStore = require('../models');
@@ -436,15 +437,16 @@ async function confirmReceiveMasterReturnOrder(id, body = {}) {
 
     const receivedChildren = await getChildren(current, { session });
     const now = dateUtil.nowIso();
+    const s3Execution = integrationConfig.isS3Execution;
     const received = {
       ...current,
       status: 'received',
-      warehouseStatus: 'posted',
+      warehouseStatus: s3Execution ? 'verified' : 'posted',
       warehouseReceiveStatus: 'received',
-      stockReceiveStatus: 'posted',
-      stockPosted: true,
+      stockReceiveStatus: s3Execution ? 'pending_s3' : 'posted',
+      stockPosted: !s3Execution,
       receivedAt: now,
-      stockPostedAt: now,
+      stockPostedAt: s3Execution ? '' : now,
       receivedBy: String(body.receivedBy || '').trim(),
       stockPostedBy: String(body.receivedBy || '').trim(),
       updatedAt: now,
@@ -458,10 +460,10 @@ async function confirmReceiveMasterReturnOrder(id, body = {}) {
         ...child,
         ...ReturnStateMachine.patchForState(child, RETURN_STATES.RECEIVED),
         returnState: RETURN_STATES.RECEIVED,
-        warehouseStatus: 'posted',
-        stockReceiveStatus: 'posted',
-        stockPosted: true,
-        stockPostedAt: child.stockPostedAt || now,
+        warehouseStatus: s3Execution ? 'verified' : 'posted',
+        stockReceiveStatus: s3Execution ? 'pending_s3' : 'posted',
+        stockPosted: !s3Execution,
+        stockPostedAt: s3Execution ? '' : (child.stockPostedAt || now),
         returnMergeStatus: 'merged',
         masterReturnOrderId: received.id,
         masterReturnOrderCode: received.code,

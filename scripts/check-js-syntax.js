@@ -2,8 +2,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
+const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(__dirname, '..');
 const SKIP = new Set(['node_modules', '.git', 'coverage', 'backups', 'uploads']);
 const files = [];
@@ -17,15 +19,43 @@ function walk(dir) {
   }
 }
 
-walk(ROOT);
-let failed = 0;
-for (const file of files) {
-  const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
-  if (result.status !== 0) {
-    failed += 1;
-    console.error(`SYNTAX_FAIL ${path.relative(ROOT, file)}`);
-    console.error(result.stderr || result.stdout);
+async function main() {
+  walk(ROOT);
+  const concurrency = Math.max(2, Math.min(16, Number(process.env.SYNTAX_CHECK_CONCURRENCY || 8)));
+  const failures = [];
+  let cursor = 0;
+
+  async function worker() {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= files.length) return;
+      const file = files[index];
+      try {
+        await execFileAsync(process.execPath, ['--check', file], {
+          encoding: 'utf8',
+          maxBuffer: 1024 * 1024
+        });
+      } catch (error) {
+        failures.push({
+          file,
+          output: String(error.stderr || error.stdout || error.message || '')
+        });
+      }
+    }
   }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, () => worker()));
+
+  for (const failure of failures) {
+    console.error(`SYNTAX_FAIL ${path.relative(ROOT, failure.file)}`);
+    console.error(failure.output);
+  }
+  if (failures.length) process.exitCode = 1;
+  else console.log(`SYNTAX_OK ${files.length} JavaScript files`);
 }
-if (failed) process.exit(1);
-console.log(`SYNTAX_OK ${files.length} JavaScript files`);
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

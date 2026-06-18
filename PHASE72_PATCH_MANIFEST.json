@@ -1,0 +1,109 @@
+{
+  "phase": 72,
+  "name": "s3-execution-only-mode-guards",
+  "source": "MK-pro-phase71-dms-live-inventory-comparison-fix-patched(2).zip",
+  "databaseMigrationRequired": false,
+  "filesAdded": [
+    "src/config/integrationConfig.js",
+    "src/domain/integration/S3ExecutionGuard.js",
+    "src/middlewares/integrationAuthority.middleware.js",
+    "test/s3-execution-config-and-policy.test.js",
+    "test/s3-execution-inventory-posting-guard.test.js",
+    "test/s3-execution-route-and-service-boundary-static.test.js",
+    "PHASE72_S3_EXECUTION_ONLY_MODE_REPORT.md",
+    "QUALITY_GATE_RESULTS_PHASE72.txt",
+    "PHASE72_DEPLOYMENT_CHECKLIST.md"
+  ],
+  "safety": {
+    "defaultMode": "STANDALONE",
+    "s3ModeFailure": "HTTP 409 + explicit error code",
+    "silentNoOp": false,
+    "syncFlagsDefault": false
+  },
+  "filesChanged": [
+    ".env.example",
+    ".env.production.example",
+    "scripts/production-readiness-check.js",
+    "src/config/integrationConfig.js",
+    "src/domain/integration/S3ExecutionGuard.js",
+    "src/middlewares/integrationAuthority.middleware.js",
+    "src/domain/posting/InventoryPostingService.js",
+    "src/services/inventoryService.js",
+    "src/routes/orderRoutes.js",
+    "src/routes/masterOrderRoutes.js",
+    "src/routes/importOrderRoutes.js",
+    "src/routes/excelImportRoutes.js",
+    "src/routes/importRuntimeRoutes.js",
+    "src/routes/importExportRoutes.js",
+    "src/routes/inventoryRoutes.js",
+    "src/routes/reportRoutes.js",
+    "src/routes/mobile/sales.routes.js",
+    "src/domain/lifecycle/SalesLifecycleService.js",
+    "src/domain/lifecycle/SalesOrderDeletionService.js",
+    "src/services/orderLegacy.service.js",
+    "src/services/master-order/masterOrderLegacy.service.js",
+    "src/services/mobile/sales.service.js",
+    "src/services/importOrderService.js",
+    "src/services/excelImportService.js",
+    "test/s3-execution-config-and-policy.test.js",
+    "test/s3-execution-inventory-posting-guard.test.js",
+    "test/s3-execution-route-and-service-boundary-static.test.js",
+    "PHASE72_S3_EXECUTION_ONLY_MODE_REPORT.md",
+    "PHASE72_PATCH_MANIFEST.json",
+    "QUALITY_GATE_RESULTS_PHASE72.txt",
+    "PHASE72_DEPLOYMENT_CHECKLIST.md"
+  ],
+  "guards": {
+    "order": [
+      "create",
+      "update",
+      "vat-setting",
+      "cancel",
+      "delete"
+    ],
+    "masterOrder": [
+      "create",
+      "update-membership",
+      "cancel",
+      "delete"
+    ],
+    "inventory": [
+      "post-in",
+      "post-out",
+      "bulk-out",
+      "edit-delta",
+      "return-in",
+      "reverse",
+      "rebuild",
+      "normalize"
+    ],
+    "excelImportTypes": [
+      "openingStock",
+      "importOrders",
+      "salesOrders",
+      "salesOrdersS3"
+    ]
+  },
+  "qualityGate": {
+    "syntax": {
+      "status": "PASS",
+      "javascriptFiles": 674
+    },
+    "targetedTests": {
+      "status": "PASS",
+      "tests": 59,
+      "failed": 0
+    },
+    "fullRegression": {
+      "status": "PASS",
+      "tests": 611,
+      "failed": 0,
+      "durationMs": 24628.112148
+    }
+  },
+  "deployment": {
+    "databaseMigrationRequired": false,
+    "restartRequired": true,
+    "rollback": "Set SYSTEM_MODE=STANDALONE and all authorities=LOCAL, then restart."
+  }
+}

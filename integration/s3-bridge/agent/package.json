@@ -1,0 +1,20 @@
+{
+  "name": "s3-v45-bridge-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Outbound-only Bridge between S3 SQL Server and V45",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/main.js && node --check src/returnProcessor.js && node --check src/sqlReturnRepository.js",
+    "health": "node scripts/health-check.js"
+  },
+  "dependencies": {
+    "mssql": "^11.0.1"
+  }
+}

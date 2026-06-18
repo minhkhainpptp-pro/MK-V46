@@ -50,6 +50,21 @@ function evaluateProductionReadiness(env = process.env) {
   if (!text(env.TRUST_PROXY)) warnings.push('Nên khai báo TRUST_PROXY phù hợp với Render/nginx');
   if (!text(env.BACKUP_DIR)) warnings.push('Nên khai báo BACKUP_DIR trên volume bền vững hoặc dùng Atlas PITR');
 
+  const systemMode = text(env.SYSTEM_MODE || 'STANDALONE').toUpperCase();
+  if (!['STANDALONE', 'S3_EXECUTION'].includes(systemMode)) {
+    errors.push('SYSTEM_MODE chỉ nhận STANDALONE hoặc S3_EXECUTION');
+  }
+  if (systemMode === 'S3_EXECUTION') {
+    for (const authorityKey of ['INVENTORY_AUTHORITY', 'ORDER_AUTHORITY', 'MASTER_ORDER_AUTHORITY']) {
+      if (text(env[authorityKey]).toUpperCase() !== 'S3') {
+        errors.push(`${authorityKey}=S3 là bắt buộc trong chế độ S3_EXECUTION`);
+      }
+    }
+    if (!enabled(env.S3_INTEGRATION_ENABLED)) {
+      errors.push('S3_INTEGRATION_ENABLED=true là bắt buộc trong chế độ S3_EXECUTION');
+    }
+  }
+
   return {
     ok: errors.length === 0,
     errors,

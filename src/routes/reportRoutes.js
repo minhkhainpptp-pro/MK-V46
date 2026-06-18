@@ -3,6 +3,7 @@
 const express = require('express');
 const reportController = require('../controllers/reportController');
 const { requireRole } = require('../middlewares/auth.middleware');
+const { blockInventorySourceWrite } = require('../middlewares/integrationAuthority.middleware');
 
 const router = express.Router();
 const adminOnly = requireRole(['admin']);
@@ -13,8 +14,8 @@ const viewStockReports = requireRole(['admin', 'manager', 'accountant', 'warehou
 router.get('/stock', viewStockReports, reportController.stock);
 router.get('/inventory-movement', viewStockReports, reportController.inventoryMovement);
 router.get('/stock-card', viewStockReports, reportController.stockCard);
-router.post('/inventory/rebuild', adminOnly, reportController.rebuildInventory);
-router.post('/inventory/normalize-one-warehouse', adminOnly, reportController.normalizeOneWarehouse);
+router.post('/inventory/rebuild', adminOnly, blockInventorySourceWrite('rebuild tồn kho V45'), reportController.rebuildInventory);
+router.post('/inventory/normalize-one-warehouse', adminOnly, blockInventorySourceWrite('chuẩn hóa/điều chỉnh tồn kho V45'), reportController.normalizeOneWarehouse);
 router.get('/debts/init', viewBusinessReports, reportController.debtsInit);
 router.get('/debts/customers', viewBusinessReports, reportController.debtsCustomers);
 router.get('/debts/customer-detail/:customerCode?', viewBusinessReports, reportController.debtsCustomerDetail);
@@ -28,8 +29,8 @@ router.get('/dashboard', viewBusinessReports, reportController.dashboard);
 router.get('/reports/stock', viewStockReports, reportController.stock);
 router.get('/reports/inventory-movement', viewStockReports, reportController.inventoryMovement);
 router.get('/reports/stock-card', viewStockReports, reportController.stockCard);
-router.post('/reports/inventory/rebuild', adminOnly, reportController.rebuildInventory);
-router.post('/reports/inventory/normalize-one-warehouse', adminOnly, reportController.normalizeOneWarehouse);
+router.post('/reports/inventory/rebuild', adminOnly, blockInventorySourceWrite('rebuild tồn kho V45'), reportController.rebuildInventory);
+router.post('/reports/inventory/normalize-one-warehouse', adminOnly, blockInventorySourceWrite('chuẩn hóa/điều chỉnh tồn kho V45'), reportController.normalizeOneWarehouse);
 router.get('/reports/debts/init', viewBusinessReports, reportController.debtsInit);
 router.get('/reports/debts/customers', viewBusinessReports, reportController.debtsCustomers);
 router.get('/reports/debts/customer-detail/:customerCode?', viewBusinessReports, reportController.debtsCustomerDetail);
