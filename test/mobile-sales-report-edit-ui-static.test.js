@@ -5,8 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const js = fs.readFileSync(path.join(__dirname, '..', 'public/mobile/js/sales.js'), 'utf8');
-const html = fs.readFileSync(path.join(__dirname, '..', 'public/mobile/sales.html'), 'utf8');
+const sourceBundle = require('./helpers/sourceBundle.util');
+const js = `${sourceBundle.readSource('public/mobile/js/sales.js')}\n${sourceBundle.readSource('public/mobile/js/sales-ux.js')}`;
+const html = require('./helpers/sourceBundle.util').readSource(path.join(__dirname, '..', 'public/mobile/sales.html'));
 
 test('sales report edit buttons use delegated click handling and explicit button type', () => {
   assert.match(js, /todayOrders\?\.addEventListener\('click'/);
@@ -16,5 +17,5 @@ test('sales report edit buttons use delegated click handling and explicit button
 });
 
 test('mobile sales script cache version is bumped for edit fix', () => {
-  assert.match(html, /sales\.js\?v=phase51-mobile-edit-posted-v1/);
+  assert.match(html, /sales\.js\?v=phase86-production-hardening-v1/);
 });

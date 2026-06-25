@@ -1,18 +1,11 @@
 'use strict';
 
 const importPreviewTable=document.getElementById('importPreviewTable');
-const customImportTemplateName=document.getElementById('customImportTemplateName');
-const customImportTemplateSelect=document.getElementById('customImportTemplateSelect');
-const customImportMappingTable=document.getElementById('customImportMappingTable');
-const addImportMappingButton=document.getElementById('addImportMappingButton');
-const saveCustomImportTemplateButton=document.getElementById('saveCustomImportTemplateButton');
-const loadCustomImportTemplateButton=document.getElementById('loadCustomImportTemplateButton');
-const downloadCustomImportTemplateButton=document.getElementById('downloadCustomImportTemplateButton');
-const deleteCustomImportTemplateButton=document.getElementById('deleteCustomImportTemplateButton');
-
 const reportFromDate=document.getElementById('reportFromDate');
 const reportToDate=document.getElementById('reportToDate');
 const reloadReportsButton=document.getElementById('reloadReportsButton');
+const applyReportFiltersButton=document.getElementById('applyReportFiltersButton');
+const clearReportFiltersButton=document.getElementById('clearReportFiltersButton');
 const reportRevenue=document.getElementById('reportRevenue');
 const reportOrderCount=document.getElementById('reportOrderCount');
 const reportCollected=document.getElementById('reportCollected');
@@ -25,7 +18,11 @@ const reportDeliveredOrders=document.getElementById('reportDeliveredOrders');
 const reportReturnAmount=document.getElementById('reportReturnAmount');
 const reportPeriodPreset=document.getElementById('reportPeriodPreset');
 const reportSearchInput=document.getElementById('reportSearchInput');
+const reportDynamicFilters=document.getElementById('reportDynamicFilters');
 const reportCatalogSearch=document.getElementById('reportCatalogSearch');
+const applyReportCatalogFiltersButton=document.getElementById('applyReportCatalogFiltersButton');
+const clearReportCatalogFiltersButton=document.getElementById('clearReportCatalogFiltersButton');
+const reloadReportCatalogButton=document.getElementById('reloadReportCatalogButton');
 const reportCatalog=document.getElementById('reportCatalog');
 const reportLoadState=document.getElementById('reportLoadState');
 const reportAlertStrip=document.getElementById('reportAlertStrip');
@@ -38,12 +35,15 @@ const reportChartPanel=document.getElementById('reportChartPanel');
 const reportChartCaption=document.getElementById('reportChartCaption');
 const reportChart=document.getElementById('reportChart');
 const reportTableStatus=document.getElementById('reportTableStatus');
-const reportClearSearchButton=document.getElementById('reportClearSearchButton');
 const reportTableHead=document.getElementById('reportTableHead');
 const reportTableBody=document.getElementById('reportTableBody');
 const reportPreviousPageButton=document.getElementById('reportPreviousPageButton');
 const reportPageInfo=document.getElementById('reportPageInfo');
 const reportNextPageButton=document.getElementById('reportNextPageButton');
+const reportRowDetailDrawer=document.getElementById('reportRowDetailDrawer');
+const reportRowDetailTitle=document.getElementById('reportRowDetailTitle');
+const reportRowDetailBody=document.getElementById('reportRowDetailBody');
+const closeReportRowDetailButton=document.getElementById('closeReportRowDetailButton');
 const reportSalesTable=document.getElementById('reportSalesTable');
 const reportStockSummary=document.getElementById('reportStockSummary');
 const reportStockTable=document.getElementById('reportStockTable');
@@ -87,8 +87,6 @@ let selectedChildOrderIds=selectedUnmergedChildOrderIds;
 // MASTER_ORDER_POPUP_PATCH_END
 let masterOrdersCache=[];
 let importPreviewRows=[];
-let customImportFields=[];
-let customImportTemplates=[];
 
 const reloadSystemStatusButton=document.getElementById('reloadSystemStatusButton');
 const reloadSystemDataSourceButton=document.getElementById('reloadSystemDataSourceButton');

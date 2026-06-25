@@ -2,6 +2,7 @@
 
 const express = require('express');
 const controller = require('../controllers/importExportController');
+const excelImportController = require('../controllers/excelImportController');
 const { requireRole } = require('../middlewares/auth.middleware');
 const {
   uploadImportExcel,
@@ -33,8 +34,14 @@ importRouter.post('/direct', controller.directImport);
 
 importRouter.get('/sessions/:sessionId/rows', controller.sessionRows);
 importRouter.get('/sessions/:sessionId', controller.sessionStatus);
+importRouter.post('/sessions/:sessionId/commit', controller.commitImport);
 importRouter.post('/commit', controller.commitImport);
 importRouter.get('/logs', controller.importLogs);
+
+// Báo cáo hàng thiếu dùng chung namespace /api/import đang được mount tại routes/index.js.
+importRouter.get('/shortage-reports', excelImportController.shortageReports);
+importRouter.get('/shortage-reports/:id', excelImportController.shortageReportDetail);
+importRouter.patch('/shortage-reports/:id', excelImportController.updateShortageReport);
 
 // Import templates
 importRouter.get('/templates', controller.listBuiltInTemplates);

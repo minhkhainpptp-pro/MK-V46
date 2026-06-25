@@ -6,7 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const ROOT = path.resolve(__dirname, '..');
-const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
+const read = (file) => require('./helpers/sourceBundle.util').readSource(file);
 
 test('mỗi tab quỹ có nút tạo phiếu riêng và form nằm trong popup tương ứng', () => {
   const html = read('public/index.html');
@@ -43,9 +43,12 @@ test('nút tạo và nút sửa mở đúng popup, lưu thành công đóng popu
 
 test('asset quỹ được cache-bust để trình duyệt nhận giao diện popup và bảng tiền cần thu mới', () => {
   const html = read('public/index.html');
-  assert.match(html, /10-operational-overrides\.css\?v=phase61-delivery-fund-split-tabs-v1/);
+  assert.match(html, /css\/overrides\/10-operational-01\.css\?v=return-order-nvgh-v1/);
+  assert.match(html, /css\/overrides\/10-operational-04\.css\?v=phase79-source-split-v1/);
   assert.match(html, /00b-debt-return-fund-state\.js\?v=phase61-delivery-fund-split-tabs-v1/);
-  assert.match(html, /07f-fund-ledger\.js\?v=phase61-delivery-fund-split-tabs-v1/);
+  assert.match(html, /07f-fund-ledger\.js\?v=phase79b-source-shards-v1/);
+  assert.match(html, /07f-fund-ledger\.part02\.js\?v=phase79b-source-shards-v1/);
+  assert.match(html, /07f-fund-ledger\.part03\.js\?v=phase79b-source-shards-v1/);
 });
 
 

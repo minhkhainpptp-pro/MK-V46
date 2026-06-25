@@ -8,7 +8,7 @@ const test = require('node:test');
 const ROOT = path.resolve(__dirname, '..');
 
 function read(rel) {
-  return fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  return require('./helpers/sourceBundle.util').readSource(path.join(ROOT, rel));
 }
 
 test('debt collection submit creates pending collection without posting ledgers', () => {
@@ -42,6 +42,6 @@ test('mobile debts endpoint uses DebtReadService and mobile debt collection subm
 
   assert.match(mobileIndex, /router\.use\('\/debts',\s*createMobileDebtRouter\(ctx\)\)/);
   assert.match(mobileIndex, /router\.use\('\/debt-collections',\s*createMobileDebtCollectionRouter\(ctx\)\)/);
-  assert.match(mobileService, /DebtReadService\.getCustomerDebts/);
+  assert.match(mobileService, /DebtReadService\.getMobileCustomerDebts/);
   assert.match(routes, /router\.post\('\/'/);
 });

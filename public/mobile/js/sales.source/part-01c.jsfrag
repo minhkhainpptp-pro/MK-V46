@@ -1,0 +1,65 @@
+// MOBILE_SALES_PHASE3_UX_START
+const mobileSalesNavigation = createMobileSalesNavigation({
+  tabs,
+  panels,
+  panelIds: ['customersTab', 'orderTab', 'cartTab', 'debtTab', 'reportTab'],
+  initialPanel: 'customersTab',
+  fallbackPanel: 'customersTab',
+  hashByPanel: {
+    customersTab: '#khach-hang',
+    orderTab: '#ban-hang',
+    cartTab: '#gio-hang',
+    debtTab: '#cong-no',
+    reportTab: '#don-hang'
+  },
+  onActivate(tabId) {
+    state.ui.activeTabId = tabId;
+    if (tabId === 'debtTab') loadDebts();
+    if (tabId === 'reportTab') loadTodayOrders();
+    if (tabId === 'orderTab' || tabId === 'cartTab') ensureProductToolsInitialized();
+  }
+});
+
+function switchTab(tabId, options = {}) {
+  state.ui.activeTabId = mobileSalesNavigation.switchPanel(tabId, options);
+}
+
+function initializeMobileNavigation() {
+  state.ui.activeTabId = mobileSalesNavigation.initialize();
+}
+
+const announceMobileStatus = createStatusAnnouncer(mobileGlobalStatus);
+
+function updateNetworkStatus() {
+  if (!networkStatus) return;
+  const online = navigator.onLine !== false;
+  networkStatus.textContent = online ? 'Đang online' : 'Đang offline';
+  networkStatus.classList.toggle('offline', !online);
+  networkStatus.classList.toggle('online', online);
+}
+
+function renderMobileListState(container, options = {}) {
+  mobileUiRuntime.renderState(container, { ...options, className: options.baseClass || 'order-list' });
+}
+
+
+// MOBILE_SALES_PHASE3_UX_END
+
+function orderStatusFilterValue() {
+  return readOrderStatusFilter(orderStatusFilter);
+}
+
+function orderMatchesDisplayFilter(order = {}) {
+  return matchesOrderStatus(order, orderStatusFilterValue());
+}
+
+function orderMatchesSearchText(order = {}) {
+  return matchesOrderSearch(order, orderSearch?.value || '');
+}
+
+function currentOrderQueryKey() {
+  return buildOrderQueryKey({
+    date: orderDateFilter?.value || todayValue(),
+    q: orderSearch?.value || ''
+  });
+}

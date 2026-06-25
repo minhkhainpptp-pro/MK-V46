@@ -1,0 +1,67 @@
+
+const v45Common = window.V45Common || {};
+const todayValue = v45Common.todayValue;
+const calculateCartonUnit = v45Common.calculateCartonUnit;
+import { mobileApi, getUser } from './api.js?v=phase86-production-hardening-v1';
+import { queueOperation, canQueueOfflineOperation, isNetworkError, listOperations } from './offline-sync.js?v=phase86-production-hardening-v1';
+import { bindLogout, debounce, escapeHtml, formatDisplayDate, formatShortDate, money, requireLogin, requireRole, setButtonBusy, setMessage } from './ui.js';
+import { buildCartItemsHtml, buildOrderCardsHtml, createMobileSalesNavigation, createStatusAnnouncer } from './sales-ux.js?v=phase86-production-hardening-v1';
+import { collectMobileSalesDom } from './sales/dom.js?v=phase86-production-hardening-v1';
+import { createMobileSalesState, OrderDraftStore } from './sales/state.js?v=phase86-production-hardening-v1';
+import {
+  buildDebtLookup, customerAddressValue, customerAvailableDebtValue, customerCodeValue,
+  customerDebtValue, customerNameValue, customerPendingCollectedValue, customerPhoneValue, customerSalesValue,
+  debtClassName, mergeCustomerDebt, mergeCustomerPages, normalizeSelectedCustomerForSubmit, uniqueCustomerIdentityKeys
+} from './sales/customer.js?v=phase86-production-hardening-v1';
+import { currentSalesStaffCode as resolveCurrentSalesStaffCode, filterOrdersForCurrentSalesUser as scopeOrdersForCurrentSalesUser } from './sales/staff.js?v=phase86-production-hardening-v1';
+import {
+  applyPromotionLines, attachPackingRate, buildPromotionCartPayloadItem, normalizePackingRate,
+  normalizeProductGroupName, normalizeProductSearchResponse, toMobileProduct as normalizeMobileProduct
+} from './sales/product.js?v=phase86-production-hardening-v1';
+import { buildOrderPayloadItems, calculateCartTotals, cartQuantityFromInputs, validateCartQuantity } from './sales/cart.js?v=phase86-production-hardening-v1';
+import { buildOrderQueryKey, mergeOrderPages, orderMatchesDisplayFilter as matchesOrderStatus, orderMatchesSearchText as matchesOrderSearch, orderStatusFilterValue as readOrderStatusFilter, upsertOrder } from './sales/orders.js?v=phase86-production-hardening-v1';
+import { debtCustomerKey, filterAndSortDebts, mergeDebtPages, parseMobileMoneyInput } from './sales/debt.js?v=phase86-production-hardening-v1';
+import { offlineOperationToOrder as mapOfflineOperationToOrder } from './sales/sync.js?v=phase86-production-hardening-v1';
+
+requireLogin();
+requireRole(['sales']);
+bindLogout(document.getElementById('logoutBtn'));
+
+const user = getUser();
+document.getElementById('staffInfo').textContent = `${user.name || user.username || 'Nhân viên'} · ${user.role || 'sales'}`;
+
+
+
+const draftStore = new OrderDraftStore({
+  ownerKey: resolveCurrentSalesStaffCode(user) || user.id || user.username || 'sales'
+});
+const state = createMobileSalesState({ draftStore });
+const {
+  tabs, panels, customerSearch, customerList, customerLoadMoreBtn, productSearch, productGroupFilter,
+  productSuggestions, selectedCustomerBox, selectedProductBox, caseQtyInput, looseQtyInput, paidAmountInput,
+  cartList, cartCustomerContext, cartCount, cartTotal, cartGrossTotal, cartDiscountTotal, orderDraftBar,
+  orderDraftLineCount, orderDraftTotal, openCartBtn, backToOrderBtn, todayOrders, orderLoadMoreBtn,
+  orderSearch, orderDateFilter, orderStatusFilter, orderFilterResultCount, message, orderFormTitle,
+  submitOrderBtn, cartTabBadge, syncNavBadge, networkStatus, mobileGlobalStatus, debtList, debtLoadMoreBtn,
+  debtLedgerList, debtTotalAmount, debtCustomerCount, debtPendingAmount, debtTabMessage,
+  debtCustomersSubtab, debtCollectSubtab, debtCustomersPanel, debtCollectPanel, debtCustomerSearch,
+  debtCustomerSort
+} = collectMobileSalesDom();
+
+const mobileUiRuntime = window.MobileUiRuntime;
+const mobileSalesLifecycle = mobileUiRuntime.createLifecycle();
+const customerListRenderer = mobileUiRuntime.createChunkedHtmlRenderer(customerList, { initialCount: 60, chunkSize: 80 });
+const debtCustomerListRenderer = mobileUiRuntime.createChunkedHtmlRenderer(debtList, { initialCount: 60, chunkSize: 80 });
+const todayOrderListRenderer = mobileUiRuntime.createChunkedHtmlRenderer(todayOrders, { initialCount: 60, chunkSize: 80 });
+
+const CUSTOMER_PAGE_LIMIT = 40;
+const DEBT_PAGE_LIMIT = 30;
+const ORDER_PAGE_LIMIT = 30;
+
+function currentSalesStaffCode() {
+  return resolveCurrentSalesStaffCode(user);
+}
+
+function filterOrdersForCurrentSalesUser(items = []) {
+  return scopeOrdersForCurrentSalesUser(items, user);
+}

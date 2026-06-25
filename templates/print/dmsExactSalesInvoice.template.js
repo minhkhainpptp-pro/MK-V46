@@ -1,6 +1,7 @@
 'use strict';
 
 const { paginateDmsExactInvoice } = require('../../src/domain/print/DmsExactPagination');
+const { getCompanyProfile } = require('../../src/config/company-profile.config');
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -22,6 +23,10 @@ function number(value) {
 
 function money(value) {
   return Math.round(number(value)).toLocaleString('vi-VN');
+}
+
+function optionalMoney(value) {
+  return value === '' || value === null || value === undefined ? '' : money(value);
 }
 
 function percent(value) {
@@ -51,11 +56,12 @@ function headerOf(data = {}) {
 
 function distributorOf(data = {}) {
   const row = payloadOf(data).distributor || {};
+  const companyProfile = getCompanyProfile();
   return {
-    code: row.code || data.company?.code || '3293',
-    name: row.name || data.company?.name || 'Công Ty TNHH MTV Minh Khai',
-    address: row.address || data.company?.address || '',
-    phone: row.phone || data.company?.phone || ''
+    code: row.code || data.company?.code || companyProfile.code,
+    name: row.name || data.company?.name || companyProfile.name,
+    address: row.address || data.company?.address || companyProfile.address,
+    phone: row.phone || data.company?.phone || companyProfile.phone
   };
 }
 
@@ -112,9 +118,11 @@ function rewardsOf(data = {}) {
 function previewActions() {
   return `
   <div class="print-preview-actions dmsx-preview-actions">
-    <button type="button" onclick="window.close()">Bỏ qua</button>
-    <button type="button" onclick="window.print()">In đơn</button>
-  </div>`;
+    <button type="button" data-print-action="close">Bỏ qua</button>
+    <button type="button" data-print-action="print">In đơn</button>
+    <button type="button" data-print-action="excel">Xuất Excel</button>
+  </div>
+  <script src="/js/print-preview-actions.js?v=phase09-csp-v1"></script>`;
 }
 
 function renderHeader(data, copyLabel, pageNo, pageCount) {
@@ -164,9 +172,11 @@ function renderItemTable(items, summary, showTotal) {
       <td class="dmsx-center">${text(item.lineNo)}</td>
       <td class="dmsx-code">${text(item.productCode)}</td>
       <td class="dmsx-product">${text(item.productName)}</td>
+      <td class="dmsx-right excel-only-column">${optionalMoney(item.catalogPackingQty)}</td>
       <td class="dmsx-center">${text(item.quantityCsSu)}</td>
       <td class="dmsx-right">${money(item.quantity)}</td>
       <td class="dmsx-right">${money(item.priceBeforeTaxBeforePromotion)}</td>
+      <td class="dmsx-right excel-only-column">${optionalMoney(item.currentCatalogSalePrice)}</td>
       <td class="dmsx-right">${money(item.priceAfterTaxBeforePromotion)}</td>
       <td class="dmsx-right">${money(item.priceAfterTaxAfterPromotion)}</td>
       <td class="dmsx-right">${money(item.vatAmount)}</td>
@@ -186,25 +196,27 @@ function renderItemTable(items, summary, showTotal) {
           <th>STT</th>
           <th>Mã hàng</th>
           <th>Tên sản phẩm</th>
+          <th class="excel-only-column">Quy cách</th>
           <th>Số lượng<br/>(CS/SU)</th>
           <th>Số<br/>lượng<br/>(lẻ)</th>
           <th>Đơn Giá<br/>(Trước<br/>Thuế/KM)</th>
+          <th class="excel-only-column">Giá bán</th>
           <th>Đơn Giá (Sau<br/>Thuế, Trước<br/>KM)</th>
           <th>Đơn giá<br/>(Sau Thuế/<br/>KM&amp;CK)</th>
           <th>Thuế<br/>GTGT</th>
           <th>Thành tiền<br/>(Sau Thuế/<br/>KM&amp;CK)</th>
         </tr>
         <tr class="dmsx-items-head-formula">
-          <th></th><th></th><th>A</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7=(5*2)</th>
+          <th></th><th></th><th>A</th><th class="excel-only-column">QC</th><th>1</th><th>2</th><th>3</th><th class="excel-only-column">GB</th><th>4</th><th>5</th><th>6</th><th>7=(5*2)</th>
         </tr>
       </thead>
       <tbody>
         ${rows}
         ${showTotal ? `
         <tr class="dmsx-total-row">
-          <td></td><td></td><td class="dmsx-center"><b>Tổng cộng (A)</b></td><td></td>
+          <td></td><td></td><td class="dmsx-center"><b>Tổng cộng (A)</b></td><td class="excel-only-column"></td><td></td>
           <td class="dmsx-right"><b>${money(summary.totalQty)}</b></td>
-          <td></td><td></td><td></td><td></td>
+          <td></td><td class="excel-only-column"></td><td></td><td></td><td></td>
           <td class="dmsx-right"><b>${money(summary.goodsAmountAfterPromotion)}</b></td>
         </tr>` : ''}
       </tbody>

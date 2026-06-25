@@ -32,10 +32,10 @@
     "migrate:return-state": "node scripts/migrate-return-state-machine.js --write",
     "repair:detached-delivery": "node scripts/repair-detached-delivery-assignments.js",
     "check:syntax": "node scripts/check-js-syntax.js",
-    "quality": "npm run check:syntax && npm run docs:check && npm test && npm audit --omit=dev --audit-level=high",
+    "quality": "npm run check:lock-registry && npm run check:path-portability && npm run check:syntax && npm run check:source-bundles && npm run check:source-size && npm run check:csp-xss && npm run check:enterprise && npm run docs:check && npm test && npm audit --omit=dev --audit-level=high",
     "check:production": "node scripts/production-readiness-check.js",
     "cleanup:retired": "node scripts/cleanup-retired-files.js",
-    "pretest": "npm run cleanup:retired",
+    "pretest": "npm run cleanup:retired && npm run check:source-bundles",
     "migrate:staff-identity:dry": "node scripts/migrate-canonical-staff-identity.js",
     "migrate:staff-identity": "node scripts/migrate-canonical-staff-identity.js --write",
     "migrate:picking-zone:dry": "node scripts/migrate-product-picking-zone.js",
@@ -43,7 +43,39 @@
     "migrate:return-state:dry": "node scripts/migrate-return-state-machine.js",
     "mongo:index-audit": "node scripts/audit-mongo-indexes.js",
     "mongo:index-cleanup": "node scripts/audit-mongo-indexes.js --write",
-    "mongo:index-cleanup:unused": "node scripts/audit-mongo-indexes.js --write --drop-unused --min-observation-hours=168"
+    "mongo:index-cleanup:unused": "node scripts/audit-mongo-indexes.js --write --drop-unused --min-observation-hours=168",
+    "check:source-size": "node scripts/check-source-size-budget.js",
+    "build:source-bundles": "node scripts/build-source-bundles.js",
+    "check:source-bundles": "node scripts/build-source-bundles.js --check",
+    "source-bundles:refresh": "node scripts/build-source-bundles.js --refresh-hashes",
+    "build:canonical-source-pilot": "node scripts/build-source-bundles.js --target=public/mobile/js/delivery-mobile-view.js",
+    "check:canonical-source-pilot": "node scripts/build-source-bundles.js --check --target=public/mobile/js/delivery-mobile-view.js",
+    "check:lock-registry": "node scripts/check-package-lock-registry.js",
+    "check:enterprise": "node scripts/enterprise-smoke-check.js",
+    "tenant:backfill:dry": "node scripts/migrate-tenant-boundary.js",
+    "tenant:backfill": "node scripts/migrate-tenant-boundary.js --write",
+    "restore:drill": "node scripts/restore-drill.js",
+    "outbox:drain": "node scripts/outbox-drain.js",
+    "analytics:rebuild": "node scripts/rebuild-reporting-projections.js",
+    "supplier-ap:rebuild:dry": "node scripts/rebuild-supplier-payable-accounts.js",
+    "supplier-ap:rebuild": "node scripts/rebuild-supplier-payable-accounts.js --write",
+    "check:path-portability": "node scripts/check-path-portability.js",
+    "audit:mobile-query-plans": "node scripts/audit-mobile-query-plans.js",
+    "audit:mobile-telemetry": "node scripts/audit-mobile-client-telemetry.js",
+    "benchmark:mobile": "node scripts/performance/mobile-production-benchmark.js",
+    "test:mobile-browser": "node scripts/mobile-browser-smoke.js",
+    "check:mobile-production": "node scripts/audit-mobile-query-plans.js && node scripts/mobile-browser-smoke.js",
+    "worker:background": "node scripts/background-job-worker.js",
+    "worker:background:once": "node scripts/background-job-worker.js --once",
+    "benchmark:background-jobs": "node scripts/performance/background-job-isolation-benchmark.js",
+    "benchmark:frontend": "node scripts/performance/frontend-dom-benchmark.js",
+    "audit:frontend-sinks": "node scripts/security/audit-frontend-sinks.js --output=CSP_XSS_SINK_INVENTORY.json",
+    "check:csp-xss": "node scripts/security/audit-frontend-sinks.js --check --output=CSP_XSS_SINK_INVENTORY.json",
+    "release:manifest": "node scripts/generate-release-manifest.js",
+    "check:release-manifest": "node scripts/generate-release-manifest.js --check",
+    "restore:drill:offline": "node scripts/restore-drill-offline.js",
+    "test:operations": "node --test test/operations-*.test.js",
+    "simulate:operations": "node scripts/operations-failure-simulation.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -61,7 +93,10 @@
     "read-excel-file": "^9.2.0"
   },
   "engines": {
-    "node": ">=20 <23",
+    "node": ">=20.20 <23",
     "npm": ">=10"
+  },
+  "devDependencies": {
+    "terser": "^5.48.0"
   }
 }

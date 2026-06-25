@@ -138,15 +138,24 @@ function apiMonitorSafeText(value) {
 }
 
 
-function apiMonitorSlowestQueryText(row = {}) {
-  const traces = Array.isArray(row.maxQueryTraces) && row.maxQueryTraces.length
-    ? row.maxQueryTraces
-    : (Array.isArray(row.lastQueryTraces) ? row.lastQueryTraces : []);
+function apiMonitorQueryText(row = {}, mode = 'history') {
+  const preferLast = mode === 'last';
+  const traces = preferLast
+    ? (Array.isArray(row.lastQueryTraces) ? row.lastQueryTraces : [])
+    : (Array.isArray(row.maxQueryTraces) && row.maxQueryTraces.length
+      ? row.maxQueryTraces
+      : (Array.isArray(row.lastQueryTraces) ? row.lastQueryTraces : []));
   const trace = traces.slice().sort((a, b) => Number(b.ms || 0) - Number(a.ms || 0))[0] || null;
-  const label = row.slowestQueryLabel || trace?.label || '';
-  const ms = Number(row.slowestQueryMs || trace?.ms || 0);
+  const label = preferLast
+    ? (row.lastSlowestQueryLabel || trace?.label || '')
+    : (row.slowestQueryLabel || trace?.label || '');
+  const ms = Number(preferLast ? (row.lastSlowestQueryMs || trace?.ms || 0) : (row.slowestQueryMs || trace?.ms || 0));
   if (!label && !ms) return '';
   return `${apiMonitorSafeText(label)}${ms ? ` (${apiMonitorFormatMs(ms)})` : ''}`;
+}
+
+function apiMonitorSlowestQueryText(row = {}) {
+  return apiMonitorQueryText(row, 'history');
 }
 
 function apiMonitorTraceRowsText(row = {}) {
@@ -182,12 +191,12 @@ function renderApiMonitorTopSlowRows(rows = []) {
   apiTopSlowTable.innerHTML = rows.length ? rows.map(row => `
     <tr class="${Number(row.maxMs || 0) >= 5000 ? 'row-danger' : ''}">
       <td>${apiMonitorSafeText(row.module || '')}</td>
-      <td><code title="${apiMonitorSafeText(row.maxOriginalUrl || row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
+      <td><code class="api-monitor-api-cell" title="${apiMonitorSafeText(row.maxOriginalUrl || row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
       <td><strong>${apiMonitorFormatMs(row.maxMs || 0)}</strong></td>
       <td>${apiMonitorFormatMs(row.avgMs || 0)}</td>
       <td>${apiMonitorFormatMs(row.avgMongoMs || 0)}</td>
       <td>${apiMonitorFormatMs(row.avgJsMs || 0)}</td>
-      <td><code title="${apiMonitorSafeText(row.slowestQueryLabel || '')}">${apiMonitorSlowestQueryText(row)}</code></td>
+      <td><code class="api-monitor-query-cell" title="${apiMonitorSafeText(row.slowestQueryLabel || '')}">${apiMonitorSlowestQueryText(row)}</code></td>
       <td>${systemFormatNumber(row.count || 0)}</td>
       <td>${systemFormatNumber(row.slowCount || 0)}</td>
       <td>${systemApiMonitorBadge(row.maxMs, row.lastStatus)}</td>
@@ -200,7 +209,7 @@ function renderApiMonitorTopCalledRows(rows = []) {
   apiTopCalledTable.innerHTML = rows.length ? rows.map(row => `
     <tr class="${Number(row.count || 0) >= 300 ? 'row-danger' : ''}">
       <td>${apiMonitorSafeText(row.module || '')}</td>
-      <td><code title="${apiMonitorSafeText(row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
+      <td><code class="api-monitor-api-cell" title="${apiMonitorSafeText(row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
       <td><strong>${systemFormatNumber(row.count || 0)}</strong></td>
       <td>${apiMonitorFormatMs(row.avgMs || 0)}</td>
       <td>${apiMonitorFormatMs(row.avgMongoMs || 0)}</td>
@@ -217,7 +226,7 @@ function renderApiMonitorTopRowsRows(rows = []) {
   apiTopRowsTable.innerHTML = rows.length ? rows.map(row => `
     <tr class="${Number(row.maxRows || 0) >= 1000 ? 'row-danger' : ''}">
       <td>${apiMonitorSafeText(row.module || '')}</td>
-      <td><code title="${apiMonitorSafeText(row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
+      <td><code class="api-monitor-api-cell" title="${apiMonitorSafeText(row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
       <td><strong>${systemFormatNumber(row.maxRows || 0)}</strong></td>
       <td>${systemFormatNumber(row.avgRows || 0)}</td>
       <td>${systemFormatNumber(row.lastRows || 0)}</td>
@@ -239,8 +248,8 @@ function renderApiMonitorTopQueryTraceRows(rows = []) {
     return `
     <tr class="${Number(row.slowestQueryMs || 0) >= 1000 || hasDirtyKeys ? 'row-danger' : ''}">
       <td>${apiMonitorSafeText(row.module || '')}</td>
-      <td><code title="${apiMonitorSafeText(row.maxOriginalUrl || row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
-      <td><code title="${apiMonitorSafeText(row.slowestQueryLabel || '')}">${apiMonitorSlowestQueryText(row)}</code></td>
+      <td><code class="api-monitor-api-cell" title="${apiMonitorSafeText(row.maxOriginalUrl || row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
+      <td><code class="api-monitor-query-cell" title="${apiMonitorSafeText(row.slowestQueryLabel || '')}">${apiMonitorSlowestQueryText(row)}</code></td>
       <td class="${hasDirtyKeys ? 'api-monitor-input-keys-cell dirty' : 'api-monitor-input-keys-cell'}">${apiMonitorTraceInputKeysHtml(row)}</td>
       <td><strong>${apiMonitorFormatMs(row.slowestQueryMs || 0)}</strong></td>
       <td>${apiMonitorTraceRowsText(row)}</td>
@@ -280,12 +289,12 @@ function renderApiMonitor(json = {}) {
       <tr class="${Number(item.ms || 0) >= 1000 || Number(item.statusCode || 0) >= 500 ? 'row-danger' : ''}">
         <td>${apiMonitorSafeText(systemFormatTime(item.at))}</td>
         <td>${apiMonitorSafeText(item.module || '')}</td>
-        <td><code>${apiMonitorSafeText(item.method || '')} ${apiMonitorSafeText(item.originalUrl || item.path || '')}</code></td>
+        <td><code class="api-monitor-api-cell" title="${apiMonitorSafeText(item.method || '')} ${apiMonitorSafeText(item.originalUrl || item.path || '')}">${apiMonitorSafeText(item.method || '')} ${apiMonitorSafeText(item.originalUrl || item.path || '')}</code></td>
         <td><strong>${apiMonitorFormatMs(item.ms || 0)}</strong></td>
         <td>${apiMonitorFormatMs(item.mongoMs || 0)}</td>
         <td>${apiMonitorFormatMs(item.jsMs || 0)}</td>
         <td>${systemFormatNumber(item.dbQueries || 0)}</td>
-        <td><code title="${apiMonitorSafeText((item.queryTraces && item.queryTraces[0] && item.queryTraces[0].label) || '')}">${apiMonitorSafeText((item.queryTraces && item.queryTraces[0] && item.queryTraces[0].label) || '')} ${item.queryTraces && item.queryTraces[0] ? '(' + apiMonitorFormatMs(item.queryTraces[0].ms || 0) + ')' : ''}</code></td>
+        <td><code class="api-monitor-query-cell" title="${apiMonitorSafeText((item.queryTraces && item.queryTraces[0] && item.queryTraces[0].label) || '')}">${apiMonitorSafeText((item.queryTraces && item.queryTraces[0] && item.queryTraces[0].label) || '')} ${item.queryTraces && item.queryTraces[0] ? '(' + apiMonitorFormatMs(item.queryTraces[0].ms || 0) + ')' : ''}</code></td>
         <td>${systemFormatNumber(item.rows || 0)}</td>
         <td>${apiMonitorSafeText(item.statusCode || '')}</td>
       </tr>
@@ -302,7 +311,7 @@ function renderApiMonitor(json = {}) {
     apiMonitorTable.innerHTML = rows.length ? rows.map(row => `
       <tr class="${row.status === 'slow' ? 'row-danger' : ''}">
         <td>${apiMonitorSafeText(row.module || '')}</td>
-        <td><code title="${apiMonitorSafeText(row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
+        <td><code class="api-monitor-api-cell" title="${apiMonitorSafeText(row.lastOriginalUrl || row.route || '')}">${apiMonitorSafeText(row.route || '')}</code></td>
         <td>${systemFormatNumber(row.count || 0)}</td>
         <td>${apiMonitorFormatMs(row.avgMs || 0)}</td>
         <td>${apiMonitorFormatMs(row.avgMongoMs || 0)}</td>
@@ -310,7 +319,7 @@ function renderApiMonitor(json = {}) {
         <td>${systemFormatNumber(row.avgDbQueries || 0)}</td>
         <td><strong>${apiMonitorFormatMs(row.maxMs || 0)}</strong></td>
         <td>${apiMonitorFormatMs(row.maxMongoMs || 0)}</td>
-        <td><code title="${apiMonitorSafeText(row.slowestQueryLabel || '')}">${apiMonitorSlowestQueryText(row)}</code></td>
+        <td><code class="api-monitor-query-cell" title="${apiMonitorSafeText(row.slowestQueryLabel || '')}">${apiMonitorQueryText(row, 'last')}</code></td>
         <td>${systemFormatNumber(row.lastRows || 0)}</td>
         <td>${systemFormatNumber(row.slowCount || 0)}</td>
         <td>${systemApiMonitorBadge(row.maxMs, row.lastStatus)}</td>

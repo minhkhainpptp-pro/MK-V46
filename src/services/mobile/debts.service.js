@@ -1,7 +1,7 @@
 'use strict';
 
-const DebtReadService = require('../DebtReadService');
 const DebtCollectionService = require('../DebtCollectionService');
+const DebtReadService = require('../DebtReadService');
 
 function text(value) {
   return String(value || '').trim();
@@ -24,23 +24,43 @@ function deliveryStaffName(user = {}) {
 }
 
 function scopeDebtQuery(query = {}, mobileUser = {}) {
-  const collectorType = text(query.collectorType || mobileUser.role || '').toLowerCase() === 'delivery' ? 'delivery' : 'sales';
+  const role = text(mobileUser.role || '').toLowerCase();
+  const requestedCollectorType = text(query.collectorType || '').toLowerCase();
+  const collectorType = role === 'delivery'
+    ? 'delivery'
+    : role === 'sales'
+      ? 'sales'
+      : requestedCollectorType === 'delivery'
+        ? 'delivery'
+        : requestedCollectorType === 'sales'
+          ? 'sales'
+          : '';
   const scopedQuery = {
     ...query,
-    collectorType,
     includePendingCollections: query.includePendingCollections ?? '1',
-    limit: query.limit || 100,
+    page: query.page || 1,
+    limit: query.limit || 30,
     includePaid: query.includePaid || '0'
   };
+  if (collectorType) scopedQuery.collectorType = collectorType;
 
   if (query.customerKeyword && !scopedQuery.q) scopedQuery.q = query.customerKeyword;
 
-  if (collectorType === 'delivery') {
-    const value = deliveryStaffCode(mobileUser) || deliveryStaffName(mobileUser);
-    if (value) scopedQuery.delivery = value;
-  } else {
-    const value = salesStaffCode(mobileUser) || salesStaffName(mobileUser);
-    if (value) scopedQuery.salesman = value;
+  if (role === 'delivery') {
+    const code = deliveryStaffCode(mobileUser);
+    if (code) scopedQuery.deliveryStaffCode = code;
+    else if (deliveryStaffName(mobileUser)) scopedQuery.deliveryStaffName = deliveryStaffName(mobileUser);
+    delete scopedQuery.salesStaffCode;
+    delete scopedQuery.salesmanCode;
+    delete scopedQuery.salesStaffName;
+    delete scopedQuery.salesmanName;
+  } else if (role === 'sales') {
+    const code = salesStaffCode(mobileUser);
+    if (code) scopedQuery.salesStaffCode = code;
+    else if (salesStaffName(mobileUser)) scopedQuery.salesStaffName = salesStaffName(mobileUser);
+    delete scopedQuery.deliveryStaffCode;
+    delete scopedQuery.deliveryCode;
+    delete scopedQuery.deliveryStaffName;
   }
 
   return scopedQuery;
@@ -48,10 +68,8 @@ function scopeDebtQuery(query = {}, mobileUser = {}) {
 
 function createMobileDebtService() {
   async function listDebts({ query = {}, mobileUser } = {}) {
-    const result = await DebtReadService.getCustomerDebts(scopeDebtQuery(query, mobileUser));
-    return {
-      body: result
-    };
+    const result = await DebtReadService.getMobileCustomerDebts(scopeDebtQuery(query, mobileUser));
+    return { body: result };
   }
 
   async function submitDebtCollection({ body = {}, mobileUser } = {}) {

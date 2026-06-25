@@ -56,7 +56,28 @@ const APP_COLLECTION_KEYS = [
   'importTemplates',
   'roles',
   'permissions',
-  'idempotencyRequests'
+  'idempotencyRequests',
+
+  'outboxEvents',
+  'purchaseOrders',
+  'goodsReceipts',
+  'supplierPayableLedgers',
+  'supplierPayableAccounts',
+  'supplierPayments',
+  'purchaseReturns',
+  'inventoryReservations',
+  'stockCounts',
+  'reportingSnapshots',
+  'mobileSyncOperations',
+  'visitPlans',
+  'visitExecutions',
+  'deliveryRoutePlans',
+  'deliveryRouteSessions',
+  'deliveryLocationPoints',
+  'integrationJobs',
+  'backgroundJobs',
+  'tenants',
+  'tenantSubscriptions'
 ];
 
 module.exports = { APP_COLLECTION_KEYS };

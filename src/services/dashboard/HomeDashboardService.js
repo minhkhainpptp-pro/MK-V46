@@ -8,6 +8,7 @@ const SalesDashboardQuery = require('./SalesDashboardQuery');
 const DebtDashboardQuery = require('./DebtDashboardQuery');
 const DeliveryDashboardQuery = require('./DeliveryDashboardQuery');
 const DashboardCacheService = require('./DashboardCacheService');
+const DashboardDailyStatsService = require('./DashboardDailyStatsService');
 const { firstValidDateExpression } = require('./DashboardMongoExpressions');
 
 const DELIVERED_STATUSES = DeliveryDashboardQuery.DELIVERED_STATUSES;
@@ -453,7 +454,7 @@ async function getHomeDashboard({ month, force = false } = {}) {
   const cacheVersion = await DashboardCacheService.freshnessVersion();
   if (!force) {
     const cached = DashboardCacheService.read(cacheKey, cacheVersion);
-    if (cached) return { ...cached, cacheHit: true };
+    if (cached && cached.meta?.source !== 'fallback-live-query') return { ...cached, cacheHit: true };
   }
 
   const queryDurationMs = {};
@@ -592,6 +593,189 @@ async function getHomeDashboard({ month, force = false } = {}) {
   return result;
 }
 
+
+async function getSalesStaffDashboard({ month, force = false } = {}) {
+  const range = parseMonth(month);
+  const today = dateUtil.todayVN();
+  const cacheKey = `sales-staff:${range.period}:${today}`;
+  const cacheVersion = await DashboardCacheService.freshnessVersion();
+  if (!force) {
+    const cached = DashboardCacheService.read(cacheKey, cacheVersion);
+    if (cached && cached.meta?.source !== 'fallback-live-query') return { ...cached, cacheHit: true };
+  }
+
+  const targets = await SalesTargetService.listByPeriod(range.period);
+  const readModel = await DashboardDailyStatsService.buildSalesStaffDashboard({ range: { ...range, today }, targets });
+  if (readModel) {
+    DashboardCacheService.write(cacheKey, cacheVersion, readModel);
+    return readModel;
+  }
+
+  const queryDurationMs = {};
+  const timed = async (name, factory) => {
+    const startedAt = Date.now();
+    try {
+      return await factory();
+    } finally {
+      queryDurationMs[name] = Date.now() - startedAt;
+    }
+  };
+
+  const [
+    activeStaff,
+    monthlySalesResult,
+    monthlyPendingSalesResult,
+    todaySalesResult,
+    monthlyReturnsResult,
+    currentDebtResult
+  ] = await Promise.all([
+    timed('activeStaff', () => listActiveStaff()),
+    timed('monthlySales', () => SalesDashboardQuery.aggregateSales(range.dateFrom, range.dateTo, { accountingScope: 'confirmed' })),
+    timed('monthlyPendingSales', () => SalesDashboardQuery.aggregateSales(range.dateFrom, range.dateTo, { accountingScope: 'pending' })),
+    timed('todaySales', () => SalesDashboardQuery.aggregateSales(today, today, { accountingScope: 'active' })),
+    timed('monthlyReturns', () => SalesDashboardQuery.aggregateReturns(range.dateFrom, range.dateTo)),
+    timed('currentDebt', () => DebtDashboardQuery.aggregateCurrentDebt())
+  ]);
+
+  const salesByStaff = mergeSalesRows({
+    activeStaff: activeStaff.sales,
+    targets,
+    monthlySales: monthlySalesResult.rows,
+    monthlyPendingSales: monthlyPendingSalesResult.rows,
+    monthlyReturns: monthlyReturnsResult.rows,
+    currentDebt: currentDebtResult.rows,
+    todaySales: todaySalesResult.rows
+  });
+
+  const result = {
+    enabled: dashboardEnabled(),
+    mode: 'sales-staff',
+    period: {
+      month: range.period,
+      dateFrom: range.dateFrom,
+      dateTo: range.dateTo,
+      today,
+      timezone: dateUtil.VIETNAM_TIME_ZONE
+    },
+    summary: buildSummary(salesByStaff, {
+      sales: monthlySalesResult.totals,
+      pendingSales: monthlyPendingSalesResult.totals,
+      todaySales: todaySalesResult.totals,
+      returns: monthlyReturnsResult.totals,
+      debt: currentDebtResult.totals
+    }),
+    salesByStaff,
+    dataQuality: buildDataQuality({
+      activeStaff,
+      monthlySales: monthlySalesResult.rows,
+      monthlyPendingSales: monthlyPendingSalesResult.rows,
+      todaySales: todaySalesResult.rows,
+      monthlyReturns: monthlyReturnsResult.rows,
+      currentDebt: currentDebtResult.rows,
+      deliveryMonthRaw: [],
+      deliveryTodayRaw: []
+    }),
+    sources: {
+      sales: monthlySalesResult.source,
+      pendingSales: monthlyPendingSalesResult.source,
+      returns: monthlyReturnsResult.source,
+      debt: currentDebtResult.source,
+      dashboardStats: 'fallback-live-query',
+      snapshot: false
+    },
+    metrics: { queryDurationMs, strategy: 'phase38-fallback-live-query' },
+    meta: {
+      source: 'fallback-live-query',
+      reason: 'dashboardDailyStats_missing_or_incomplete'
+    },
+    generatedAt: new Date().toISOString(),
+    cacheHit: false,
+    cacheEnabled: DashboardCacheService.enabled()
+  };
+
+  DashboardCacheService.write(cacheKey, cacheVersion, result);
+  return result;
+}
+
+async function getDeliveryDashboard({ month, force = false } = {}) {
+  const range = parseMonth(month);
+  const today = dateUtil.todayVN();
+  const cacheKey = `delivery-summary:${range.period}:${today}`;
+  const cacheVersion = await DashboardCacheService.freshnessVersion();
+  if (!force) {
+    const cached = DashboardCacheService.read(cacheKey, cacheVersion);
+    if (cached && cached.meta?.source !== 'fallback-live-query') return { ...cached, cacheHit: true };
+  }
+
+  const readModel = await DashboardDailyStatsService.buildDeliveryDashboard({ range: { ...range, today } });
+  if (readModel) {
+    DashboardCacheService.write(cacheKey, cacheVersion, readModel);
+    return readModel;
+  }
+
+  const queryDurationMs = {};
+  const timed = async (name, factory) => {
+    const startedAt = Date.now();
+    try {
+      return await factory();
+    } finally {
+      queryDurationMs[name] = Date.now() - startedAt;
+    }
+  };
+
+  const [
+    activeStaff,
+    deliveryMonthResult,
+    deliveryTodayResult,
+    deliveryMonthReturns,
+    deliveryTodayReturns
+  ] = await Promise.all([
+    timed('activeStaff', () => listActiveStaff()),
+    timed('deliveryMonth', () => DeliveryDashboardQuery.aggregateDeliveryMonth(range.dateFrom, range.dateTo)),
+    timed('deliveryToday', () => DeliveryDashboardQuery.aggregateDeliveryToday(today)),
+    timed('deliveryMonthReturns', () => DeliveryDashboardQuery.aggregateDeliveryReturns(range.dateFrom, range.dateTo)),
+    timed('deliveryTodayReturns', () => DeliveryDashboardQuery.aggregateDeliveryReturns(today, today))
+  ]);
+
+  const deliveryMonth = mergeDeliveryRows(activeStaff.delivery, deliveryMonthResult.rows, deliveryMonthReturns);
+  const deliveryToday = mergeDeliveryRows(activeStaff.delivery, deliveryTodayResult.rows, deliveryTodayReturns);
+  const result = {
+    enabled: dashboardEnabled(),
+    mode: 'delivery-summary',
+    period: {
+      month: range.period,
+      dateFrom: range.dateFrom,
+      dateTo: range.dateTo,
+      today,
+      timezone: dateUtil.VIETNAM_TIME_ZONE
+    },
+    deliveryMonth,
+    deliveryToday,
+    sources: {
+      deliveryMonth: deliveryMonthResult.source,
+      deliveryToday: deliveryTodayResult.source,
+      dashboardStats: 'fallback-live-query',
+      snapshot: false
+    },
+    meta: {
+      source: 'fallback-live-query',
+      reason: 'dashboardDailyStats_missing_or_incomplete'
+    },
+    metrics: {
+      queryDurationMs,
+      strategy: 'phase38-fallback-live-query',
+      deliveryMonth: deliveryMonthResult.perf || null,
+      deliveryToday: deliveryTodayResult.perf || null
+    },
+    generatedAt: new Date().toISOString(),
+    cacheHit: false,
+    cacheEnabled: DashboardCacheService.enabled()
+  };
+
+  DashboardCacheService.write(cacheKey, cacheVersion, result);
+  return result;
+}
+
 module.exports = {
   CACHE_TTL_MS,
   dashboardEnabled,
@@ -607,6 +791,9 @@ module.exports = {
   mergeDeliveryRows,
   buildDataQuality,
   buildSummary,
+  listActiveStaff,
   invalidateDashboardCache,
-  getHomeDashboard
+  getHomeDashboard,
+  getSalesStaffDashboard,
+  getDeliveryDashboard
 };

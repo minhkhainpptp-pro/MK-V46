@@ -5,22 +5,12 @@ const { PRINT_PROFILES, PRINT_DOCUMENT_TYPES, createPrintDocument, cleanText, un
 const { normalizeLine } = require('../PrintLineNormalizer');
 const { mergeLines } = require('../PrintMergeService');
 const { pickingZoneLabel, PICKING_ZONES } = require('../../../utils/pickingZone.util');
-
+const ProductCatalogExportPolicy = require('../../catalog/ProductCatalogExportPolicy');
+const { comparePickingZoneThenProductNameAsc } = require('../../../utils/productSort');
 
 function compareMasterPickingLines(a = {}, b = {}) {
-  const zoneOrder = { [PICKING_ZONES.HC]: 0, [PICKING_ZONES.PC]: 1, [PICKING_ZONES.UNASSIGNED]: 2 };
-  const zoneCompare = (zoneOrder[a.pickingZone] ?? 99) - (zoneOrder[b.pickingZone] ?? 99);
-  if (zoneCompare) return zoneCompare;
-
-  const nameCompare = cleanText(a.productName).localeCompare(cleanText(b.productName), 'vi', {
-    sensitivity: 'base',
-    numeric: true
-  });
-  if (nameCompare) return nameCompare;
-
-  const codeCompare = cleanText(a.productCode).localeCompare(cleanText(b.productCode), 'vi', { numeric: true });
-  if (codeCompare) return codeCompare;
-
+  const productCompare = comparePickingZoneThenProductNameAsc(a, b);
+  if (productCompare) return productCompare;
   return toNumber(a.catalogPrice) - toNumber(b.catalogPrice);
 }
 
@@ -41,7 +31,7 @@ function buildMasterKpis(masterOrders = [], childrenByMaster = new Map(), produc
     const productSaleAmount = children.reduce((sum, child) => {
       return sum + (Array.isArray(child.items) ? child.items : []).reduce((lineSum, item) => {
         const productCode = cleanText(item.productCode || item.code || item.sku || item.productId);
-        const line = normalizeLine(item, { parent: child, product: productMap.get(productCode) || {}, mode: 'sale' });
+        const line = normalizeLine(item, { parent: child, product: productMap.get(productCode) || {}, mode: 'sale', currentProductPickingZone: true });
         return lineSum + (line.lineType === 'PROMO' ? 0 : line.quantity * line.catalogPrice);
       }, 0);
     }, 0);
@@ -78,11 +68,12 @@ function buildMasterPicking(masterOrders = [], children = [], context = {}) {
 
     for (const item of Array.isArray(child.items) ? child.items : []) {
       const productCode = cleanText(item.productCode || item.code || item.sku || item.productId);
-      rawLines.push(normalizeLine(item, {
-        parent: child,
-        product: productMap.get(productCode) || {},
-        mode: 'sale'
-      }));
+      const product = productMap.get(productCode) || {};
+      rawLines.push({
+        ...normalizeLine(item, { parent: child, product, mode: 'sale', currentProductPickingZone: true }),
+        catalogPackingQty: ProductCatalogExportPolicy.packingQty(product),
+        catalogSalePrice: ProductCatalogExportPolicy.salePrice(product)
+      });
     }
   }
 
@@ -97,9 +88,11 @@ function buildMasterPicking(masterOrders = [], children = [], context = {}) {
     qty: line.quantity,
     conversionRate: line.conversionRate,
     packingQty: line.conversionRate,
+    catalogPackingQty: line.catalogPackingQty,
     pickingZone: line.pickingZone,
     warehouseCode: line.warehouseCode,
     warehouseName: pickingZoneLabel(line.pickingZone),
+    catalogSalePrice: line.catalogSalePrice,
     salePrice: line.catalogPrice,
     price: line.catalogPrice,
     finalPrice: line.finalPrice,
@@ -152,7 +145,7 @@ function buildMasterPicking(masterOrders = [], children = [], context = {}) {
     metadata: {
       mergeKey: 'pickingZone+lineType+productCode+catalogPrice',
       itemSort: 'PRODUCT_NAME_ASC',
-      pickingZonePolicy: 'HC_PC_PRINT_ONLY_INVENTORY_MAIN',
+      pickingZonePolicy: 'CURRENT_PRODUCT_CATALOG_FIRST_HC_PC_PRINT_ONLY_INVENTORY_MAIN',
       pricingPolicy: 'ORDER_SNAPSHOT_FIRST_PRODUCT_FALLBACK'
     }
   });

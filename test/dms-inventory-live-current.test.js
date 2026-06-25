@@ -10,7 +10,7 @@ const inventoryStockService = require('../src/services/inventoryStock.service');
 const Product = require('../src/models/Product');
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+  return require('./helpers/sourceBundle.util').readSource(path.join(__dirname, '..', relativePath));
 }
 
 test('buildComparisonRows reads the current available quantity from inventories', async () => {
@@ -136,7 +136,7 @@ test('admin UI labels current inventory source and busts the old frontend cache'
   const css = read('public/css/80-dms-inventory.css');
 
   assert.match(indexHtml, /Tồn thực tế hiện tại/);
-  assert.match(indexHtml, /10-dms-inventory\.js\?v=phase71-dms-live-inventory-v1/);
+  assert.match(indexHtml, /10-dms-inventory\.js\?v=phase86-production-hardening-v1/);
   assert.match(adminJs, /Tồn thực tế đọc trực tiếp từ inventories/);
   assert.match(adminJs, /internalUpdatedAt/);
   assert.match(adminJs, /params\.set\('refresh','1'\)/);

@@ -8,7 +8,7 @@ const test = require('node:test');
 const ROOT = path.resolve(__dirname, '..');
 
 function read(file) {
-  return fs.readFileSync(path.join(ROOT, file), 'utf8');
+  return require('./helpers/sourceBundle.util').readSource(path.join(ROOT, file));
 }
 
 test('fundService lazily resolves the delivery-only master order service', () => {
@@ -39,6 +39,7 @@ test('masterOrderDelivery service exposes listDeliveryToday through the query bo
 
   assert.match(facade, /const deliveryQuery = require\('\.\/deliveryTodayQuery\.service'\)/);
   assert.match(facade, /module\.exports = \{ \.\.\.query, \.\.\.command, \.\.\.deliveryQuery, \.\.\.deliveryCommand \}/);
-  assert.match(deliveryQuery, /listDeliveryToday:\s*\(\.\.\.args\) => legacy\.listDeliveryToday\(\.\.\.args\)/);
-  assert.match(deliveryQuery, /listDeliveryTodayOrdersCompact:\s*\(\.\.\.args\) => legacy\.listDeliveryTodayOrdersCompact\(\.\.\.args\)/);
+  assert.match(deliveryQuery, /require\('\.\/deliveryTodayList\.impl'\)/);
+  assert.match(deliveryQuery, /require\('\.\/deliveryOrdersCompact\.impl'\)/);
+  assert.doesNotMatch(deliveryQuery, /masterOrderLegacy\.service/);
 });

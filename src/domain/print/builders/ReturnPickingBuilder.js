@@ -4,12 +4,14 @@ const { toNumber } = require('../../../utils/common.util');
 const { PRINT_PROFILES, PRINT_DOCUMENT_TYPES, createPrintDocument, cleanText, uniqueText } = require('../PrintContract');
 const { normalizeLine } = require('../PrintLineNormalizer');
 const { mergeLines } = require('../PrintMergeService');
+const ProductCatalogExportPolicy = require('../../catalog/ProductCatalogExportPolicy');
+const { sortProductsByPickingZoneThenNameAsc } = require('../../../utils/productSort');
 
 function buildReturnKpis(children = [], productMap = new Map()) {
   const rows = children.map((child) => {
     const saleAmount = (Array.isArray(child.items) ? child.items : []).reduce((sum, item) => {
       const productCode = cleanText(item.productCode || item.code || item.sku || item.productId);
-      const line = normalizeLine(item, { parent: child, product: productMap.get(productCode) || {}, mode: 'return' });
+      const line = normalizeLine(item, { parent: child, product: productMap.get(productCode) || {}, mode: 'return', currentProductPickingZone: true });
       return sum + line.quantity * line.finalPrice;
     }, 0);
     const payableAmount = toNumber(child.debtReduction ?? child.totalAmount ?? child.amount ?? saleAmount);
@@ -38,15 +40,17 @@ function buildReturnPicking(masterReturnOrder = {}, children = [], context = {})
   for (const child of children) {
     for (const item of Array.isArray(child.items) ? child.items : []) {
       const productCode = cleanText(item.productCode || item.code || item.sku || item.productId);
-      rawLines.push(normalizeLine(item, {
-        parent: child,
-        product: productMap.get(productCode) || {},
-        mode: 'return'
-      }));
+      const product = productMap.get(productCode) || {};
+      rawLines.push({
+        ...normalizeLine(item, { parent: child, product, mode: 'return', currentProductPickingZone: true }),
+        catalogPackingQty: ProductCatalogExportPolicy.packingQty(product),
+        catalogSalePrice: ProductCatalogExportPolicy.salePrice(product)
+      });
     }
   }
 
-  const mergedLines = mergeLines(rawLines, { priceField: 'finalPrice' });
+  // Gộp dòng trả hàng trước, sau đó sort ABC theo tên SP trong từng nhóm HC/PC.
+  const mergedLines = sortProductsByPickingZoneThenNameAsc(mergeLines(rawLines, { priceField: 'finalPrice' }));
   const totalQty = mergedLines.reduce((sum, line) => sum + toNumber(line.quantity), 0);
   const totalAmount = mergedLines.reduce((sum, line) => sum + toNumber(line.quantity) * toNumber(line.finalPrice), 0);
   const kpis = buildReturnKpis(children, productMap);
@@ -76,7 +80,9 @@ function buildReturnPicking(masterReturnOrder = {}, children = [], context = {})
     totals: { totalQty, totalAmount, orderCount: children.length },
     metadata: {
       mergeKey: 'warehouseCode+lineType+productCode+finalPrice',
-      pricingPolicy: 'ORIGINAL_SALES_LINE_SNAPSHOT_FIRST_PRODUCT_FALLBACK'
+      itemSort: 'PRODUCT_NAME_ASC',
+      pricingPolicy: 'ORIGINAL_SALES_LINE_SNAPSHOT_FIRST_PRODUCT_FALLBACK',
+      pickingZonePolicy: 'CURRENT_PRODUCT_CATALOG_FIRST'
     }
   });
 
@@ -110,8 +116,10 @@ function buildReturnPicking(masterReturnOrder = {}, children = [], context = {})
       qty: line.quantity,
       conversionRate: line.conversionRate,
       packingQty: line.conversionRate,
+      catalogPackingQty: line.catalogPackingQty,
       warehouseCode: line.warehouseCode,
       warehouseName: line.warehouseName,
+      catalogSalePrice: line.catalogSalePrice,
       salePrice: line.finalPrice,
       price: line.finalPrice,
       finalPrice: line.finalPrice,
@@ -120,6 +128,7 @@ function buildReturnPicking(masterReturnOrder = {}, children = [], context = {})
       lineType: 'RETURN',
       sourceOrderCodes: line.sourceOrderCodes
     })),
+    itemSort: 'PRODUCT_NAME_ASC',
     printMode: contract.document.printMode,
     printProfile: contract.profile,
     printContract: contract

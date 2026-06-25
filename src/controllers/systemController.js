@@ -2,6 +2,8 @@
 
 const systemService = require('../services/systemService');
 const ReconciliationService = require('../domain/reconciliation/ReconciliationService');
+const JobSubmissionService = require('../services/background-jobs/JobSubmissionService');
+const operationsService = require('../services/operationsService');
 
 function sendError(res, err, fallbackMessage) {
   const status = err.status || 500;
@@ -113,6 +115,23 @@ async function reset(req, res) {
   }
 }
 
+
+async function operations(req, res) {
+  try {
+    res.json(await operationsService.detailedStatus());
+  } catch (err) {
+    sendError(res, err, 'Không đọc được trạng thái vận hành');
+  }
+}
+
+async function release(req, res) {
+  try {
+    res.json({ ok: true, data: operationsService.internalReleaseSummary() });
+  } catch (err) {
+    sendError(res, err, 'Không đọc được release manifest');
+  }
+}
+
 async function apiMonitor(req, res) {
   try {
     res.json(await systemService.getApiMonitor({
@@ -137,18 +156,24 @@ async function resetApiMonitor(req, res) {
 async function runReconciliation(req, res) {
   try {
     const type = req.body?.type || req.query?.type || 'all';
-    const report = await ReconciliationService.runReconciliation(type, {
+    const explicitKey = String(req.headers['x-idempotency-key'] || req.body?.idempotencyKey || '').trim();
+    const submitted = await JobSubmissionService.submitReconciliation({
+      type,
       source: 'manual_api',
-      checkedBy: req.user?.code || req.user?.username || req.user?.name || 'admin'
+      checkedBy: req.user?.code || req.user?.username || req.user?.name || 'admin',
+      idempotencyKey: explicitKey,
+      actor: req.user || {}
     });
-
-    res.json({
+    return res.status(202).json({
       ok: true,
       success: true,
-      data: report
+      accepted: true,
+      jobId: submitted.job.id,
+      statusUrl: `/api/background-jobs/${encodeURIComponent(submitted.job.id)}`,
+      data: submitted.job
     });
   } catch (err) {
-    sendError(res, err, 'Không chạy được đối soát ledger');
+    return sendError(res, err, 'Không đưa được tác vụ đối soát vào hàng đợi');
   }
 }
 
@@ -178,6 +203,8 @@ module.exports = {
   listBackups,
   verifyBackup,
   reset,
+  operations,
+  release,
   apiMonitor,
   resetApiMonitor,
   runReconciliation,

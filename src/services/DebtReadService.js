@@ -7,6 +7,10 @@ const dateUtil = require('../utils/date.util');
 const { toNumber } = require('../utils/common.util');
 const { normalizeDebtAmount, hasOpenDebt } = require('../constants/finance.constants');
 const { arEntryBalanceEffect } = require('../utils/arLedger.util');
+const {
+  getMobileCustomerDebts: getPagedMobileCustomerDebts,
+  loadDebtBalancesForCustomers
+} = require('./mobile/mobileDebtQuery.service');
 
 const PENDING_STATUSES = ['submitted', 'under_review'];
 const INACTIVE_AR_STATUSES = ['void', 'cancelled', 'canceled', 'deleted', 'duplicate_cancelled', 'reversed'];
@@ -252,6 +256,8 @@ function pickDebtSourceRow(rows = []) {
   return rows.find((row) => ['ar_sale', 'ar_external_debt'].includes(lower(row.type))) || rows.find((row) => toNumber(row.debit) > 0) || rows[0] || null;
 }
 
+const DEBT_ORDER_LEDGER_PROJECTION = 'id code type source sourceId sourceType refType refId refCode orderId orderCode salesOrderId salesOrderCode customerCode customerName debit credit amount status date createdAt salesStaffCode salesStaffName salesmanCode salesmanName nvbhCode nvbhName deliveryStaffCode deliveryStaffName deliveryCode deliveryName nvghCode nvghName';
+
 function assignmentFromRow(row = {}) {
   return {
     salesStaffCode: text(row.salesStaffCode || row.salesmanCode || row.nvbhCode),
@@ -273,7 +279,9 @@ function scopeMatches(source = {}, scope = {}) {
 async function loadOrderDebtRows(orderKeys = [], options = {}) {
   const keys = [...new Set(orderKeys.map(text).filter(Boolean))];
   if (!keys.length) return [];
-  let query = ArLedger.find({ $and: [activeArFilter(), orderRefCondition(keys)] }).limit(Math.max(200, keys.length * 50));
+  let query = ArLedger.find({ $and: [activeArFilter(), orderRefCondition(keys)] })
+    .select(DEBT_ORDER_LEDGER_PROJECTION)
+    .limit(Math.max(200, keys.length * 50));
   query = withSession(query, options.session);
   return query.lean();
 }
@@ -445,6 +453,8 @@ async function checkAvailableDebt(input = {}) {
 
 module.exports = {
   getCustomerDebts,
+  getMobileCustomerDebts: getPagedMobileCustomerDebts,
+  loadDebtBalancesForCustomers,
   checkAvailableDebt,
   getOrderDebt,
   sumPendingAllocation,

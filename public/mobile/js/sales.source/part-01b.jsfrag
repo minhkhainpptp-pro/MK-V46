@@ -1,0 +1,376 @@
+function hasDirtyOrderDraft() {
+  return state.draft.isDirty(paidAmountInput?.value || 0);
+}
+
+function persistOrderDraft() {
+  state.draft.persist(paidAmountInput?.value || '');
+}
+
+function clearPersistedOrderDraft() {
+  state.draft.clearPersistence();
+}
+
+function renderSelectedCustomerContext() {
+  if (!state.draft.customer) {
+    selectedCustomerBox.textContent = 'Chưa chọn khách hàng. Hãy sang tab Khách hàng để chọn.';
+    selectedCustomerBox.classList.add('muted');
+    if (cartCustomerContext) {
+      cartCustomerContext.textContent = 'Chưa chọn khách hàng cho đơn này.';
+      cartCustomerContext.classList.add('muted');
+    }
+    return;
+  }
+  const customer = state.draft.customer;
+  const code = customerCodeValue(customer);
+  const name = customerNameValue(customer);
+  const summary = {
+    heading: `${code || ''}${code && name ? ' - ' : ''}${name || ''}`,
+    lines: [
+      `SĐT: ${customerPhoneValue(customer) || ''}`,
+      `ĐC: ${customerAddressValue(customer) || ''}`,
+      `Nợ: ${money(customerDebtValue(customer))} · DS tháng: ${money(customerSalesValue(customer))}`
+    ]
+  };
+  window.SafeDom.renderSummary(selectedCustomerBox, summary);
+  selectedCustomerBox.classList.remove('muted');
+  if (cartCustomerContext) {
+    window.SafeDom.renderSummary(cartCustomerContext, { ...summary, prefix: 'Đơn đang lập cho' });
+    cartCustomerContext.classList.remove('muted');
+  }
+}
+
+function restoreOrderDraft() {
+  const restored = state.draft.restore();
+  if (!restored) return false;
+  if (restored.customer) state.draft.customer = normalizeSelectedCustomerForSubmit(restored.customer);
+  if (paidAmountInput) paidAmountInput.value = restored.paidAmount;
+  renderSelectedCustomerContext();
+  if (state.draft.editingOrderId) {
+    orderFormTitle.textContent = `Tiếp tục sửa đơn ${state.draft.editingOrderId}`;
+    submitOrderBtn.textContent = `Lưu sửa đơn ${state.draft.editingOrderId}`;
+  }
+  return hasDirtyOrderDraft();
+}
+
+function offlineOperationToOrder(operation = {}) {
+  return mapOfflineOperationToOrder(operation, {
+    customerName: customerNameValue,
+    customerCode: customerCodeValue
+  });
+}
+
+async function loadPendingOfflineOrders() {
+  try {
+    const operations = await listOperations({ statuses: ['pending', 'failed', 'conflict', 'needs_attention'], limit: 100 });
+    state.sync.pendingOrders = operations
+      .filter((operation) => operation.type === 'sales_order_create')
+      .map(offlineOperationToOrder);
+    if (syncNavBadge) {
+      syncNavBadge.textContent = String(state.sync.pendingOrders.length);
+      syncNavBadge.hidden = state.sync.pendingOrders.length === 0;
+    }
+    renderTodayOrders(state.orders.rows);
+  } catch (_) {
+    state.sync.pendingOrders = [];
+    if (syncNavBadge) syncNavBadge.hidden = true;
+  }
+}
+
+tabs.forEach((btn) => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+openCartBtn?.addEventListener('click', () => switchTab('cartTab'));
+backToOrderBtn?.addEventListener('click', () => switchTab('orderTab', { historyMode: 'replace' }));
+
+mobileSalesLifecycle.delegate(customerList, 'click', '[data-customer-index]', (_event, button) => {
+    const customer = state.customer.rows[Number(button.dataset.customerIndex)];
+    if (customer) selectCustomer(customer);
+  });
+mobileSalesLifecycle.delegate(debtList, 'click', '[data-debt-index]:not([disabled])', (_event, button) => {
+    const customer = state.debt.rows[Number(button.dataset.debtIndex)];
+    if (customer) openDebtCollection(customer);
+  });
+mobileSalesLifecycle.listen(window, 'pagehide', () => {
+  customerListRenderer.cancel();
+  debtCustomerListRenderer.cancel();
+  todayOrderListRenderer.cancel();
+  mobileSalesLifecycle.destroy();
+}, { once: true });
+
+document.addEventListener('click', (event) => {
+  const retry = event.target.closest('[data-mobile-retry]');
+  if (!retry) return;
+  const action = retry.dataset.mobileRetry;
+  if (action === 'customers') loadCustomers(customerSearch.value.trim(), { reset: true, force: true });
+  if (action === 'orders') loadTodayOrders({ reset: true, force: true });
+  if (action === 'debts') loadDebts({ reset: true, force: true });
+});
+customerSearch.addEventListener('input', debounce(() => loadCustomers(customerSearch.value.trim(), { reset: true }), 250));
+document.getElementById('reloadCustomersBtn')?.addEventListener('click', () => {
+  if (window.CatalogCache) window.CatalogCache.invalidate('customers');
+  loadCustomers(customerSearch.value.trim(), { reset: true, force: true });
+});
+customerLoadMoreBtn?.addEventListener('click', () => loadCustomers(state.customer.query, { append: true }));
+document.getElementById('reloadOrdersBtn')?.addEventListener('click', () => loadTodayOrders({ reset: true, force: true }));
+orderLoadMoreBtn?.addEventListener('click', () => loadTodayOrders({ append: true }));
+debtLoadMoreBtn?.addEventListener('click', () => loadDebts({ append: true }));
+orderSearch?.addEventListener('input', debounce(() => {
+  state.orders.loaded = false;
+  state.orders.loadedKey = '';
+  loadTodayOrders({ reset: true, force: true });
+}, 300));
+orderDateFilter?.addEventListener('change', () => {
+  state.orders.loaded = false;
+  state.orders.loadedKey = '';
+  loadTodayOrders({ reset: true, force: true });
+});
+orderStatusFilter?.addEventListener('change', () => renderTodayOrders(state.orders.rows, state.orders.summary));
+
+todayOrders?.addEventListener('click', async (event) => {
+  const editButton = event.target.closest('[data-edit-order]');
+  if (editButton && todayOrders.contains(editButton)) {
+    setButtonBusy(editButton, true, 'Đang mở...');
+    try {
+      await editTodayOrder(editButton.dataset.editOrder);
+    } finally {
+      setButtonBusy(editButton, false);
+    }
+    return;
+  }
+
+  const deleteButton = event.target.closest('[data-delete-order]');
+  if (deleteButton && todayOrders.contains(deleteButton)) {
+    setButtonBusy(deleteButton, true, 'Đang xóa...');
+    try {
+      await deleteTodayOrder(deleteButton.dataset.deleteOrder, deleteButton.dataset.orderCode);
+    } finally {
+      setButtonBusy(deleteButton, false);
+    }
+  }
+});
+document.getElementById('reloadDebtsBtn')?.addEventListener('click', () => {
+  if (state.debt.formDirty && !window.confirm('Bạn đang có phiếu thu chưa gửi. Tải lại sẽ xóa dữ liệu đang nhập.')) return;
+  state.debt.formDirty = false;
+  loadDebts({ reset: true, force: true });
+});
+debtCustomersSubtab?.addEventListener('click', () => setDebtSubtab('customers'));
+debtCollectSubtab?.addEventListener('click', () => setDebtSubtab('collect'));
+debtCustomerSearch?.addEventListener('input', () => renderDebtCustomerList(state.debt.rows));
+debtCustomerSort?.addEventListener('change', () => renderDebtCustomerList(state.debt.rows));
+document.getElementById('clearOrderBtn')?.addEventListener('click', () => {
+  if (hasDirtyOrderDraft() && !window.confirm('Làm mới sẽ xóa khách hàng và toàn bộ giỏ đang nhập. Bạn có chắc không?')) return;
+  clearOrderForm(true);
+});
+document.getElementById('logoutBtn')?.addEventListener('click', (event) => {
+  if (!hasDirtyOrderDraft()) return;
+  if (window.confirm('Bạn đang có đơn chưa lưu. Thoát ứng dụng vẫn giữ bản nháp trên thiết bị. Bạn có chắc muốn thoát?')) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+paidAmountInput?.addEventListener('input', persistOrderDraft);
+window.addEventListener('beforeunload', (event) => {
+  if (!hasDirtyOrderDraft()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+window.addEventListener('mkpro:offline-queued', (event) => {
+  if (event.detail?.type === 'sales_order_create') {
+    loadPendingOfflineOrders();
+    announceMobileStatus('Đơn đã được lưu trên thiết bị và đang chờ đồng bộ.', 'warning', { persist: true });
+  }
+});
+window.addEventListener('mkpro:offline-synced', async () => {
+  await loadPendingOfflineOrders();
+  if (state.orders.loaded) await loadTodayOrders({ reset: true, force: true });
+  announceMobileStatus('Đã đồng bộ dữ liệu chờ lên máy chủ.', 'success');
+});
+window.addEventListener('online', () => {
+  updateNetworkStatus();
+  announceMobileStatus('Đã có kết nối mạng. Bạn có thể gửi lại thao tác chưa hoàn tất.', 'success');
+});
+window.addEventListener('offline', () => {
+  updateNetworkStatus();
+  announceMobileStatus('Mất kết nối mạng. Đơn chưa gửi vẫn được giữ dưới dạng bản nháp và chưa ghi lên máy chủ.', 'warning', { persist: true });
+});
+
+initSalesApp();
+
+async function initSalesApp() {
+  updateNetworkStatus();
+  initializeMobileNavigation();
+  if (orderDateFilter && !orderDateFilter.value) orderDateFilter.value = todayValue();
+  bindCartInteractions();
+  renderDebtLedger();
+  setDebtSubtab('customers', { restoreScroll: false });
+  const restoredDraft = restoreOrderDraft();
+  if (restoredDraft) announceMobileStatus('Đã khôi phục đơn đang nhập trên thiết bị này.', 'success');
+  const runtimeConfigPromise = mobileApi.getRuntimeConfig().catch(() => null);
+  await loadPendingOfflineOrders();
+  await loadCustomers('', { reset: true });
+  await runtimeConfigPromise;
+  renderCart();
+  activateTabData(state.ui.activeTabId);
+}
+
+async function filterCustomers(keyword = '', options = {}) {
+  return mobileApi.getCustomers(keyword, {
+    page: options.page || 1,
+    limit: options.limit || CUSTOMER_PAGE_LIMIT,
+    requestKey: 'mobile-customers',
+    cancelPrevious: options.cancelPrevious !== false
+  });
+}
+
+
+async function loadCustomers(q = '', options = {}) {
+  const append = options.append === true;
+  if (state.customer.loading) return;
+  if (append && !state.customer.hasMore) return;
+  const requestSeq = ++state.customer.requestSeq;
+  const nextPage = append ? state.customer.page + 1 : 1;
+  state.customer.loading = true;
+  state.customer.query = q;
+  setButtonBusy(customerLoadMoreBtn, true, 'Đang tải...');
+  try {
+    if (!append) {
+      renderMobileListState(customerList, {
+        state: 'loading',
+        baseClass: 'customer-list',
+        title: q ? 'Đang tìm khách hàng...' : 'Đang tải khách hàng phụ trách...'
+      });
+    }
+    const data = await filterCustomers(q, { page: nextPage, cancelPrevious: !append });
+    if (requestSeq !== state.customer.requestSeq) return;
+    const rows = data.items || data.customers || [];
+    state.customer.page = Number(data.pagination?.page || nextPage);
+    state.customer.hasMore = Boolean(data.pagination?.hasMore);
+    state.customer.rows = append ? mergeCustomerPages(state.customer.rows, rows) : rows;
+    renderCustomerList(state.customer.rows);
+    if (customerLoadMoreBtn) customerLoadMoreBtn.hidden = !state.customer.hasMore;
+  } catch (err) {
+    if (requestSeq !== state.customer.requestSeq || err?.code === 'REQUEST_ABORTED') return;
+    if (!append) {
+      renderMobileListState(customerList, {
+        state: 'error',
+        baseClass: 'customer-list',
+        title: 'Không tải được khách hàng',
+        detail: err.message || 'Vui lòng kiểm tra kết nối và thử lại.',
+        retryAction: 'customers'
+      });
+    } else {
+      setMessage(message, err.message || 'Không tải thêm được khách hàng', 'error');
+    }
+  } finally {
+    if (requestSeq === state.customer.requestSeq) state.customer.loading = false;
+    setButtonBusy(customerLoadMoreBtn, false);
+  }
+}
+
+function renderCustomerList(items) {
+  const debtLookup = buildDebtLookup(state.debt.rows);
+  const sortedItems = (Array.isArray(items) ? items : [])
+    .map((customer) => mergeCustomerDebt(customer, debtLookup))
+    .sort((a, b) => customerDebtValue(b) - customerDebtValue(a));
+  state.customer.rows = sortedItems;
+
+  if (!sortedItems.length) {
+    renderMobileListState(customerList, {
+      state: 'empty',
+      baseClass: 'customer-list',
+      title: 'Không có khách hàng phù hợp',
+      detail: customerSearch.value.trim() ? 'Hãy thử từ khóa ngắn hơn hoặc kiểm tra mã khách.' : 'Danh sách khách hàng phụ trách đang trống.'
+    });
+    return;
+  }
+
+  customerList.className = 'customer-list';
+  const renderCustomerCard = (customer, index) => {
+    const code = customerCodeValue(customer);
+    const name = customerNameValue(customer);
+    const debt = customerDebtValue(customer);
+    const phone = customerPhoneValue(customer);
+    const address = customerAddressValue(customer);
+    return `
+      <button class="customer-card ${debtClassName(customer)}" data-customer-index="${index}">
+        <strong>${escapeHtml(code || '')}${code && name ? ' - ' : ''}${escapeHtml(name || '')}</strong>
+        <span class="customer-contact">SĐT: ${escapeHtml(phone)}</span>
+        <span class="customer-contact">ĐC: ${escapeHtml(address)}</span>
+        <div class="customer-metrics">
+          <em class="metric-debt">Nợ: ${money(debt)}</em>
+          <em>DS tháng: ${money(customerSalesValue(customer))}</em>
+        </div>
+      </button>
+    `;
+  };
+  customerListRenderer.render(sortedItems, renderCustomerCard);
+}
+
+function selectCustomer(customer) {
+  const mergedCustomer = normalizeSelectedCustomerForSubmit(mergeCustomerDebt(customer, buildDebtLookup(state.debt.rows)));
+  const currentKey = uniqueCustomerIdentityKeys(state.draft.customer || {})[0] || '';
+  const nextKey = uniqueCustomerIdentityKeys(mergedCustomer)[0] || '';
+  const isDifferentCustomer = Boolean(state.draft.customer && (currentKey || nextKey) && currentKey !== nextKey);
+
+  if (isDifferentCustomer && (state.draft.cart.length || state.draft.editingOrderId)) {
+    const confirmed = window.confirm('Giỏ hiện tại đang thuộc khách hàng khác. Đổi khách sẽ xóa toàn bộ giỏ đang nhập. Bạn có chắc không?');
+    if (!confirmed) return;
+    state.draft.cart = [];
+    state.draft.editingOrderId = '';
+    paidAmountInput.value = '';
+    renderCart();
+  }
+
+  state.draft.customer = mergedCustomer;
+  renderSelectedCustomerContext();
+  persistOrderDraft();
+  setMessage(message, 'Đã chọn khách hàng. Hãy thêm sản phẩm vào giỏ.', 'success');
+  switchTab('orderTab');
+  ensureProductToolsInitialized();
+  setTimeout(() => productSearch.focus(), 200);
+}
+
+
+
+function formatStockTL(qty, rate){ return calculateCartonUnit(qty, rate).display; }
+function quantityDisplayTL(item = {}) {
+  const rate = normalizePackingRate(item);
+  return formatStockTL(Number(item.quantity || item.qty || 0), rate);
+}
+
+// MOBILE_SALES_CART_PROMOTION_RECALC_START
+
+async function recalculateCartPromotions(options = {}) {
+  if (!state.draft.cart.length) return;
+  const silent = !!options.silent;
+  try {
+    const data = await mobileApi.calculatePromotions({
+      date: todayValue(),
+      saleDate: todayValue(),
+      items: state.draft.cart.map(buildPromotionCartPayloadItem)
+    });
+    const lines = Array.isArray(data?.result?.lines) ? data.result.lines : [];
+    state.draft.cart = applyPromotionLines(state.draft.cart, lines);
+  } catch (err) {
+    if (!silent) setMessage(message, err.message || 'Không tính được khuyến mại cho giỏ hàng', 'error');
+    // Fallback an toàn: vẫn tính theo giá gốc để app không bị treo, backend sẽ tính lại khi lưu đơn.
+    state.draft.cart = state.draft.cart.map((item) => {
+      const quantity = Number(item.quantity || 0);
+      const grossPrice = Number(item.grossPrice || item.originalPrice || item.catalogSalePrice || item.salePrice || item.price || 0);
+      return {
+        ...item,
+        originalPrice: grossPrice,
+        grossPrice,
+        catalogSalePrice: grossPrice,
+        unitPrice: grossPrice,
+        salePrice: grossPrice,
+        price: grossPrice,
+        discountAmount: 0,
+        promotionAmount: 0,
+        totalDiscountAmount: 0,
+        amount: Math.round(quantity * grossPrice),
+        saleMethod: 'promotion',
+        saleMode: 'promotion',
+        pricingMode: 'promotion',
+        priceLocked: true
+      };
+    });
+  }
+}

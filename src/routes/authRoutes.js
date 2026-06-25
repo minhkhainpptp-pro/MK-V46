@@ -9,6 +9,7 @@ const { verifyPassword } = require('../security/passwordPolicy');
 const { readRefreshToken, setRefreshTokenCookie, clearRefreshTokenCookie, exposeRefreshTokenInBody } = require('../security/refreshTokenCookie');
 const { setAccessTokenCookie, clearAccessTokenCookie } = require('../security/accessTokenCookie');
 const { pickSalesStaffCode, pickSalesStaffName, pickUserAccountSalesStaffCode } = require('../domain/staff/staffIdentity');
+const { getRuntimeConfig } = require('../config/app.config');
 
 const router = express.Router();
 
@@ -21,12 +22,15 @@ const ROLE_LABELS = {
   delivery: 'Giao hàng'
 };
 
-const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || process.env.MOBILE_ACCESS_TOKEN_EXPIRES_IN || '15m';
-const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || process.env.MOBILE_REFRESH_TOKEN_EXPIRES_IN || '30d';
+const SECURITY_CONFIG = getRuntimeConfig().security;
+const ACCESS_TOKEN_EXPIRES_IN = SECURITY_CONFIG.accessTokenExpiresIn;
+const REFRESH_TOKEN_EXPIRES_IN = SECURITY_CONFIG.refreshTokenExpiresIn;
+const AUTH_RATE_LIMIT_MAX = SECURITY_CONFIG.authRateLimitMax;
+const AUTH_REFRESH_RATE_LIMIT_MAX = SECURITY_CONFIG.authRefreshRateLimitMax;
 
 const authLimiter = rateLimit({
-  windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
-  max: Number(process.env.AUTH_RATE_LIMIT_MAX || 20),
+  windowMs: SECURITY_CONFIG.authRateLimitWindowMs,
+  max: AUTH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
@@ -34,8 +38,8 @@ const authLimiter = rateLimit({
 });
 
 const refreshLimiter = rateLimit({
-  windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
-  max: Number(process.env.AUTH_REFRESH_RATE_LIMIT_MAX || 60),
+  windowMs: SECURITY_CONFIG.authRateLimitWindowMs,
+  max: AUTH_REFRESH_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, success: false, message: 'Quá nhiều yêu cầu làm mới phiên đăng nhập.' }
@@ -50,6 +54,7 @@ function safeUser(user = {}) {
   const code = String(salesStaffCode || user.staffCode || user.code || '').trim();
   const name = String(salesStaffName || user.fullName || user.name || user.username || code || '').trim();
   return {
+    tenantId: String(user.tenantId || process.env.DEFAULT_TENANT_ID || 'minh-khai').trim(),
     id: String(user._id || user.id || code || '').trim(),
     code,
     staffCode: code,
@@ -94,7 +99,11 @@ router.post('/login', authLimiter, async (req, res) => {
     const password = String(req.body?.password || '').trim();
     if (!username || !password) return res.status(400).json({ ok: false, success: false, message: 'Thiếu tài khoản hoặc mật khẩu' });
 
+    const tenantFilter = String(process.env.TENANT_MODE || 'single').toLowerCase() === 'multi'
+      ? { tenantId: req.tenantId }
+      : {};
     const user = await User.findOne({
+      ...tenantFilter,
       isActive: { $ne: false },
       $or: [
         { username },

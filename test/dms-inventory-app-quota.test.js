@@ -9,7 +9,7 @@ const dmsService = require('../src/services/dmsInventoryReconciliation.service')
 const quotaService = require('../src/services/internalSaleAllocation.service');
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+  return require('./helpers/sourceBundle.util').readSource(path.join(__dirname, '..', relativePath));
 }
 
 test('DMS parser normalizes yellow-column headers and SAP workbook wrapper', () => {
@@ -125,5 +125,5 @@ test('admin and mobile UI expose actual stock, DMS difference, and App selling l
   assert.match(mobileJs, /Tồn thực tế/);
   assert.match(mobileJs, /Được bán App/);
   assert.match(mobileJs, /qty > maxOrderQty/);
-  assert.match(mobileHtml, /sales\.js\?v=phase51-mobile-edit-posted-v1/);
+  assert.match(mobileHtml, /sales\.js\?v=phase86-production-hardening-v1/);
 });

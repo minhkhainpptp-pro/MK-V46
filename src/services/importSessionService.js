@@ -3,6 +3,7 @@
 const { makeId } = require('../utils/common.util');
 const ImportSession = require('../models/ImportSession');
 const ImportSessionRow = require('../models/ImportSessionRow');
+const BackgroundJob = require('../models/BackgroundJob');
 const { cleanupImportFiles, cleanupImportSession } = require('../utils/importTempFileStore');
 
 const IMPORT_PREVIEW_LIMIT = Number(process.env.IMPORT_PREVIEW_LIMIT || 100);
@@ -10,6 +11,52 @@ const IMPORT_SESSION_ROW_BATCH_SIZE = Number(process.env.IMPORT_SESSION_ROW_BATC
 
 function cleanText(value) {
   return String(value ?? '').trim();
+}
+
+const IMPORT_FAILURE_MESSAGE_MAX = 1200;
+const IMPORT_FAILURE_STACK_MAX = 8000;
+
+function escapeRegExp(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function sanitizeImportFailureText(value, maxLength) {
+  let text = String(value ?? '').replace(/\0/g, '').trim();
+  if (!text) return '';
+
+  const cwd = cleanText(process.cwd());
+  if (cwd) text = text.replace(new RegExp(escapeRegExp(cwd), 'g'), '<app>');
+
+  text = text
+    .replace(/(mongodb(?:\+srv)?:\/\/)([^@\s]+)@/gi, '$1<redacted>@')
+    .replace(/\b(authorization|cookie|password|passwd|secret|token)\s*[:=]\s*([^\s,;]+)/gi, '$1=<redacted>');
+
+  return text.slice(0, Math.max(1, Number(maxLength) || IMPORT_FAILURE_MESSAGE_MAX));
+}
+
+function normalizeImportFailure(failure = {}) {
+  const source = failure && typeof failure === 'object' && !Array.isArray(failure)
+    ? failure
+    : { message: failure };
+  const kind = source.kind === 'data' ? 'data' : 'system';
+  const rawCode = cleanText(source.code || (kind === 'data' ? 'IMPORT_EXCEL_DATA_ERROR' : 'IMPORT_WORKER_SYSTEM_ERROR'));
+  const code = rawCode.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80) || 'IMPORT_WORKER_SYSTEM_ERROR';
+  const message = sanitizeImportFailureText(
+    source.message || (kind === 'data' ? 'Dữ liệu Excel không hợp lệ' : 'Import worker thất bại'),
+    IMPORT_FAILURE_MESSAGE_MAX
+  );
+  const stack = sanitizeImportFailureText(source.stack || '', IMPORT_FAILURE_STACK_MAX);
+
+  return {
+    code,
+    kind,
+    message,
+    stack,
+    source: sanitizeImportFailureText(source.source || '', 40),
+    exitCode: Number.isInteger(source.exitCode) ? source.exitCode : null,
+    signal: sanitizeImportFailureText(source.signal || '', 40),
+    at: new Date().toISOString()
+  };
 }
 
 function getRowDocumentCode(row = {}) {
@@ -258,13 +305,33 @@ async function savePreviewResult(id, { rows = [], previewRows = [], fileNames = 
   );
 }
 
-async function markFailed(id, errorMessage) {
-  return ImportSession.findOneAndUpdate(
-    { $or: [{ id }, { sessionId: id }] },
+async function markFailed(id, failure, { preserveExistingDetails = false } = {}) {
+  const value = cleanText(id);
+  if (!value) return null;
+
+  const normalizedFailure = normalizeImportFailure(failure);
+  const identityFilter = { $or: [{ id: value }, { sessionId: value }] };
+  const filter = preserveExistingDetails
+    ? {
+        $and: [
+          identityFilter,
+          {
+            $or: [
+              { 'result.importFailure.message': { $exists: false } },
+              { 'result.importFailure.message': '' }
+            ]
+          }
+        ]
+      }
+    : identityFilter;
+
+  const updated = await ImportSession.findOneAndUpdate(
+    filter,
     {
       $set: {
         status: 'failed',
-        errorMessage: String(errorMessage || ''),
+        errorMessage: normalizedFailure.message,
+        'result.importFailure': normalizedFailure,
         failedAt: new Date(),
         finishedAt: new Date(),
         progress: {
@@ -276,6 +343,9 @@ async function markFailed(id, errorMessage) {
     },
     { new: true }
   );
+
+  if (!updated && preserveExistingDetails) return getSession(value);
+  return updated;
 }
 
 async function getSession(id) {
@@ -417,15 +487,32 @@ async function recoverStaleImportSessions({ olderThanMs = Number(process.env.IMP
     updatedAt: { $lt: cutoff }
   }).sort({ updatedAt: 1 }).limit(Math.max(1, Math.min(500, Number(limit) || 100))).lean();
 
+  const sessionIds = stale.map((session) => cleanText(session.sessionId || session.id)).filter(Boolean);
+  const activeJobs = sessionIds.length ? await BackgroundJob.find({
+    type: 'import_preview',
+    idempotencyKey: { $in: sessionIds.map((id) => `import-preview:${id}`) },
+    status: { $in: ['pending', 'running', 'cancel_requested'] }
+  }).select({ idempotencyKey: 1 }).lean() : [];
+  const protectedSessions = new Set(activeJobs.map((job) => cleanText(job.idempotencyKey).replace(/^import-preview:/, '')));
+
+  let recovered = 0;
+  let preserved = 0;
   for (const session of stale) {
     const sessionId = cleanText(session.sessionId || session.id);
-    await markFailed(sessionId, 'Import bị gián đoạn do server restart hoặc worker không phản hồi. Vui lòng tải lại file.');
+    // Persistent jobs survive web/worker restarts through their Mongo lease. Do not
+    // fail a queued session merely because the web process has not updated it recently.
+    if (protectedSessions.has(sessionId)) {
+      preserved += 1;
+      continue;
+    }
+    await markFailed(sessionId, 'Import bị gián đoạn và không còn background job có thể tiếp tục. Vui lòng tải lại file.');
     const files = Array.isArray(session.tempFiles) ? session.tempFiles : [];
     if (files.length) await cleanupImportFiles(files).catch(() => {});
     await cleanupImportSession(sessionId).catch(() => {});
+    recovered += 1;
   }
 
-  return { recovered: stale.length, cutoff };
+  return { recovered, preserved, cutoff };
 }
 
 module.exports = {
@@ -435,6 +522,7 @@ module.exports = {
   markParsing,
   savePreviewResult,
   markFailed,
+  normalizeImportFailure,
   recoverStaleImportSessions,
   getSession,
   listSessionRows,

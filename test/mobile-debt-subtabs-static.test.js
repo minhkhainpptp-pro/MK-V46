@@ -6,7 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const ROOT = path.resolve(__dirname, '..');
-const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
+const read = (file) => require('./helpers/sourceBundle.util').readSource(file);
 
 test('sales debt tab separates customer list and collection workflow into two subtabs', () => {
   const html = read('public/mobile/sales.html');
@@ -21,8 +21,8 @@ test('sales debt tab separates customer list and collection workflow into two su
   assert.match(html, /id="debtCustomerSort"/);
   assert.match(js, /function setDebtSubtab\(/);
   assert.match(js, /function openDebtCollection\(/);
-  assert.match(js, /selectedDebtCustomerKey/);
-  assert.match(js, /debtFormDirty/);
+  assert.match(js, /state\.debt\.selectedCustomerKey/);
+  assert.match(js, /state\.debt\.formDirty/);
   assert.match(js, /Đang chờ KT/);
   assert.match(js, /setDebtSubtab\('customers', \{ restoreScroll: true \}\)/);
   assert.match(css, /\.debt-submit-bar\s*\{/);
@@ -30,7 +30,10 @@ test('sales debt tab separates customer list and collection workflow into two su
 });
 
 test('delivery debt tab uses the same two-subtab interaction and preserves list position', () => {
-  const js = read('public/mobile/js/delivery-mobile-view.js');
+  const js = [
+    read('public/mobile/js/delivery-mobile-view.js'),
+    read('public/mobile/js/delivery-state.js')
+  ].join('\n');
   const css = read('public/mobile/mobile.css');
 
   assert.match(js, /debtSubtab:\s*'customers'/);

@@ -1,0 +1,59 @@
+/* Phase45 Flash/RIA Lite Skin for MK-Pro mobile sales/delivery apps. Visual-only, reduced motion and low blur for field devices. */
+:root{
+  --mk-bg-main:#071018;
+  --mk-bg-card:rgba(15,23,42,.86);
+  --mk-border-soft:rgba(148,163,184,.22);
+  --mk-cyan:#22d3ee;
+  --mk-green:#34d399;
+  --mk-orange:#f59e0b;
+  --mk-red:#fb7185;
+  --mk-text-main:#e5f0ff;
+  --mk-text-muted:#9fb0c8;
+  --mk-ease-flash:cubic-bezier(.25,.46,.45,.94);
+  --bg:#071018;
+  --card:rgba(15,23,42,.88);
+  --text:#e5f0ff;
+  --muted:#9fb0c8;
+  --border:rgba(148,163,184,.22);
+  --primary:#22d3ee;
+  --danger:#fb7185;
+  --shadow:0 14px 34px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.08);
+}
+@keyframes mkMobileElasticIn{0%{opacity:0;transform:translateY(10px) scale(.98)}100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes mkMobileGlow{0%,100%{box-shadow:0 0 12px rgba(34,211,238,.16),inset 0 1px 0 rgba(255,255,255,.08)}50%{box-shadow:0 0 18px rgba(34,211,238,.24),inset 0 1px 0 rgba(255,255,255,.14)}}
+body{
+  background:radial-gradient(circle at 10% 0%,rgba(34,211,238,.14),transparent 18rem),linear-gradient(160deg,#050816 0%,#0f172a 56%,#111827 100%)!important;
+  color:var(--mk-text-main)!important;
+}
+.mobile-page{color:var(--mk-text-main)}
+.mobile-header{
+  border:1px solid rgba(148,163,184,.16);border-radius:0 0 22px 22px;margin:-14px -4px 14px;padding:13px 12px 15px!important;
+  background:linear-gradient(145deg,rgba(15,23,42,.94),rgba(2,6,23,.76))!important;box-shadow:0 12px 28px rgba(0,0,0,.20);backdrop-filter:blur(8px);
+}
+.mobile-header h1,.brand-box h1{color:#fff!important;text-shadow:0 0 16px rgba(34,211,238,.22)}
+p,.help-text,.muted,.selected-box.muted,.empty{color:var(--mk-text-muted)!important}
+.auth-card,.card,.mobile-card,.customer-card,.order-item,.cart-item,.suggestion-item,.selected-box,.total-box,.order-draft-bar,.sticky-cart-card,.debt-workspace,.debt-subpanel,.delivery-customer-card,.delivery-compact-card,.delivery-return-card,.delivery-dashboard-card,.delivery-kpi-card{
+  border:1px solid var(--mk-border-soft)!important;border-radius:20px!important;
+  background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.022)),var(--mk-bg-card)!important;
+  color:var(--mk-text-main)!important;box-shadow:var(--shadow)!important;animation:mkMobileElasticIn .24s var(--mk-ease-flash) both;
+}
+.card h2,.mobile-card h1,.mobile-card h2,.section-title-row h2{color:#fff!important}
+input:not([type="checkbox"]):not([type="radio"]),select,textarea{
+  border:1px solid rgba(148,163,184,.28)!important;border-radius:15px!important;
+  background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.02)),rgba(2,6,23,.58)!important;
+  color:#edf6ff!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.10)!important;
+}
+input::placeholder,textarea::placeholder{color:rgba(203,213,225,.60)!important}
+input:focus,select:focus,textarea:focus{border-color:rgba(34,211,238,.68)!important;box-shadow:0 0 0 3px rgba(34,211,238,.10),inset 0 1px 0 rgba(255,255,255,.12)!important}
+select option{background:#0f172a;color:#e5f0ff}
+.primary-btn,.ghost-btn,.danger-btn,.tab-btn,button{
+  position:relative;overflow:hidden;border-radius:999px!important;border:1px solid rgba(255,255,255,.17)!important;font-weight:800!important;
+  transition:transform .14s var(--mk-ease-flash),filter .14s var(--mk-ease-flash)!important;
+  box-shadow:0 9px 18px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.24)!important;
+}
+.primary-btn,button.primary-btn{background:linear-gradient(135deg,#10b981,#22d3ee)!important;color:#031018!important}.ghost-btn{background:linear-gradient(135deg,rgba(51,65,85,.96),rgba(15,23,42,.90))!important;color:#e2e8f0!important}.danger-btn{background:linear-gradient(135deg,#fb7185,#ef4444)!important;color:#fff!important}.primary-btn:active,.ghost-btn:active,.danger-btn:active,.tab-btn:active,button:active{transform:scale(.96)!important}.primary-btn:hover,.ghost-btn:hover,.danger-btn:hover,.tab-btn:hover,button:hover{filter:brightness(1.04) saturate(1.08)}
+.mobile-tabs,.mobile-bottom-nav{background:rgba(2,6,23,.78)!important;border:1px solid rgba(148,163,184,.16)!important;box-shadow:0 -12px 28px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.08)!important;backdrop-filter:blur(8px)}
+.tab-btn{background:rgba(15,23,42,.66)!important;color:#cbd5e1!important}.tab-btn.active{background:linear-gradient(135deg,rgba(16,185,129,.32),rgba(34,211,238,.20))!important;color:#fff!important;animation:mkMobileGlow 2.8s ease-in-out infinite}.tab-badge,.pill,.network-status,.delivery-badge,.badge{background:linear-gradient(135deg,rgba(34,211,238,.20),rgba(52,211,153,.12))!important;color:#b7eaff!important;border:1px solid rgba(255,255,255,.16)!important;border-radius:999px!important;box-shadow:0 0 12px rgba(34,211,238,.15)}
+.message.success{color:#a7f3d0!important}.message.error,.danger-text{color:#fecdd3!important}.cart-total-summary,.cart-payable-row,.mobile-kpi-grid .kpi-card,.total-box{background:rgba(2,6,23,.34)!important;border-color:rgba(148,163,184,.18)!important}.cart-total-summary strong,.total-box strong,.kpi-card strong{color:#e9fbff!important}.suggestion-box,.cart-list,.order-list,.customer-list{gap:10px!important}.auth-card .brand-logo{background:linear-gradient(135deg,#10b981,#22d3ee)!important;color:#031018!important;box-shadow:0 0 20px rgba(34,211,238,.24)}
+@media(max-width:520px){.mobile-header{backdrop-filter:none}.auth-card,.card,.mobile-card{box-shadow:0 10px 22px rgba(0,0,0,.20)!important}.tab-btn.active{animation:none}.primary-btn:hover,.ghost-btn:hover,.danger-btn:hover,.tab-btn:hover,button:hover{filter:none}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}

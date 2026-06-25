@@ -52,6 +52,8 @@
     }
   };
   const detailPlaceholders = {};
+  const programListRequests = new Map();
+  let promotionProgramSearchTimer = null;
   function detailSectionByType(type){
     return $(TYPE_CONFIG[type]?.form)?.closest('.promotion-program-detail') || null;
   }
@@ -176,9 +178,9 @@
       <td>${esc(p.programName||p.content||'')}</td>
       <td>${timeText(p)}</td>
       <td>${statusBadge(p)}</td>
-      <td><button type="button" class="small secondary" onclick="viewPromotionProgramByType('${esc(type)}','${esc(p.programCode)}')">Xem</button></td>
-      <td><button type="button" class="small" onclick="selectPromotionProgramByType('${esc(type)}','${esc(p.programCode)}')">Sửa</button></td>
-      <td><button type="button" class="small danger" onclick="cancelPromotionProgramByType('${esc(type)}','${esc(p.programCode)}')">Huỷ</button></td>
+      <td><button type="button" class="small secondary" data-promo-program-action="view" data-promo-type="${esc(type)}" data-program-code="${esc(p.programCode)}">Xem</button></td>
+      <td><button type="button" class="small" data-promo-program-action="select" data-promo-type="${esc(type)}" data-program-code="${esc(p.programCode)}">Sửa</button></td>
+      <td><button type="button" class="small danger" data-promo-program-action="cancel" data-promo-type="${esc(type)}" data-program-code="${esc(p.programCode)}">Huỷ</button></td>
     </tr>`).join('');
   }
   function renderDetailEmpty(type, text='Chưa chọn chương trình.'){
@@ -206,33 +208,63 @@
     if(type==='productRules'){
       const rows=detail?.productRules||[];
       if(!rows.length){ renderDetailEmpty(type,'Chương trình chưa có dòng CK sản phẩm.'); return; }
-      detailTable.innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.productCode)}</td><td>${esc(r.productName)}</td><td>${fmtPct(r.discountPercent)}</td><td><button type="button" class="small" onclick="editProductRuleLine('${esc(p.programCode)}','${rowKey(r)}')">Sửa</button></td><td><button type="button" class="small danger" onclick="deleteProductRuleLine('${esc(p.programCode)}','${rowKey(r)}')">Xóa</button></td></tr>`).join('');
+      detailTable.innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.productCode)}</td><td>${esc(r.productName)}</td><td>${fmtPct(r.discountPercent)}</td><td><button type="button" class="small" data-promo-program-action="edit-product-rule" data-program-code="${esc(p.programCode)}" data-row-id="${rowKey(r)}">Sửa</button></td><td><button type="button" class="small danger" data-promo-program-action="delete-product-rule" data-program-code="${esc(p.programCode)}" data-row-id="${rowKey(r)}">Xóa</button></td></tr>`).join('');
       return;
     }
     if(type==='groupItems'){
       const rows=detail?.groupItems||[];
       if(!rows.length){ renderDetailEmpty(type,'Nhóm chưa có sản phẩm.'); return; }
-      detailTable.innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.productCode)}</td><td>${esc(r.productName)}</td><td><button type="button" class="small" onclick="editGroupProductLine('${esc(p.programCode)}','${rowKey(r)}')">Sửa</button></td><td><button type="button" class="small danger" onclick="deleteGroupProductLine('${esc(p.programCode)}','${rowKey(r)}')">Xóa</button></td></tr>`).join('');
+      detailTable.innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.productCode)}</td><td>${esc(r.productName)}</td><td><button type="button" class="small" data-promo-program-action="edit-group-product" data-program-code="${esc(p.programCode)}" data-row-id="${rowKey(r)}">Sửa</button></td><td><button type="button" class="small danger" data-promo-program-action="delete-group-product" data-program-code="${esc(p.programCode)}" data-row-id="${rowKey(r)}">Xóa</button></td></tr>`).join('');
       return;
     }
     fillTierGroupSelect(detail);
     const rows=detail?.groupRules||[];
     if(!rows.length){ renderDetailEmpty(type,'Chương trình chưa có điều kiện bậc thang.'); return; }
-    detailTable.innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.groupCode||r.programCode||'')}</td><td>${fmtMoney(r.minAmount)}</td><td>${fmtPct(r.discountPercent)}</td><td><button type="button" class="small" onclick="editTierLine('${esc(p.programCode)}','${rowKey(r)}')">Sửa</button></td><td><button type="button" class="small danger" onclick="deleteTierLine('${esc(p.programCode)}','${rowKey(r)}')">Xóa</button></td></tr>`).join('');
+    detailTable.innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.groupCode||r.programCode||'')}</td><td>${fmtMoney(r.minAmount)}</td><td>${fmtPct(r.discountPercent)}</td><td><button type="button" class="small" data-promo-program-action="edit-tier" data-program-code="${esc(p.programCode)}" data-row-id="${rowKey(r)}">Sửa</button></td><td><button type="button" class="small danger" data-promo-program-action="delete-tier" data-program-code="${esc(p.programCode)}" data-row-id="${rowKey(r)}">Xóa</button></td></tr>`).join('');
   }
   async function loadPromotionProgramsByType(type){
     const cfg=TYPE_CONFIG[type]; const table=$(cfg.table); const state=states[type]; if(!table)return;
-    try{
-      const json=await api(`/api/promotions/programs?${queryParams(type)}`);
-      state.programs=json.programs||[];
-      renderProgramListByType(type);
-      if(state.selectedCode && !state.programs.some(p=>String(p.programCode)===String(state.selectedCode))){
-        state.selectedCode=''; state.detail=null; fillForm(type,{}); renderDetailEmpty(type);
-      }
-    }catch(err){ table.innerHTML=`<tr><td colspan="${cfg.listColspan||8}">${esc(err.message)}</td></tr>`; }
+    const params=queryParams(type);
+    const requestKey=`${type}:${params}`;
+    if(programListRequests.has(requestKey)) return programListRequests.get(requestKey);
+    const request=(async()=>{
+      try{
+        const json=await api(`/api/promotions/programs?${params}`);
+        state.programs=json.programs||[];
+        renderProgramListByType(type);
+        if(state.selectedCode && !state.programs.some(p=>String(p.programCode)===String(state.selectedCode))){
+          state.selectedCode=''; state.detail=null; fillForm(type,{}); renderDetailEmpty(type);
+        }
+      }catch(err){ table.innerHTML=`<tr><td colspan="${cfg.listColspan||8}">${esc(err.message)}</td></tr>`; }
+      finally{ programListRequests.delete(requestKey); }
+    })();
+    programListRequests.set(requestKey,request);
+    return request;
   }
   async function loadAllPromotionProgramTabs(){
-    await Promise.all(Object.keys(TYPE_CONFIG).map(type=>loadPromotionProgramsByType(type)));
+    const requestKey=`all:${searchInput?.value||''}`;
+    if(programListRequests.has(requestKey)) return programListRequests.get(requestKey);
+    const request=(async()=>{
+      try{
+        const params=new URLSearchParams();
+        params.set('type','all');
+        const q=searchInput?.value||'';
+        if(q)params.set('q',q);
+        const json=await api(`/api/promotions/programs?${params.toString()}`);
+        const byType=json.programsByType||{};
+        Object.keys(TYPE_CONFIG).forEach(type=>{
+          states[type].programs=byType[type]||[];
+          renderProgramListByType(type);
+          if(states[type].selectedCode && !states[type].programs.some(p=>String(p.programCode)===String(states[type].selectedCode))){
+            states[type].selectedCode=''; states[type].detail=null; fillForm(type,{}); renderDetailEmpty(type);
+          }
+        });
+      }catch(err){
+        await Promise.all(Object.keys(TYPE_CONFIG).map(type=>loadPromotionProgramsByType(type)));
+      }finally{ programListRequests.delete(requestKey); }
+    })();
+    programListRequests.set(requestKey,request);
+    return request;
   }
   window.loadPromotionProgramsByType=loadPromotionProgramsByType;
   window.loadPromotionPrograms=loadAllPromotionProgramTabs;
@@ -361,8 +393,28 @@
       openPromotionWorkspace(type,'create');
     });
   });
+  document.addEventListener('click',event=>{
+    const button=event.target.closest('[data-promo-program-action]');
+    if(!button)return;
+    const action=button.dataset.promoProgramAction;
+    const type=button.dataset.promoType||'';
+    const code=button.dataset.programCode||'';
+    const rowId=button.dataset.rowId||'';
+    if(action==='view')window.viewPromotionProgramByType(type,code);
+    if(action==='select')window.selectPromotionProgramByType(type,code);
+    if(action==='cancel')window.cancelPromotionProgramByType(type,code);
+    if(action==='edit-product-rule')window.editProductRuleLine(code,rowId);
+    if(action==='delete-product-rule')window.deleteProductRuleLine(code,rowId);
+    if(action==='edit-group-product')window.editGroupProductLine(code,rowId);
+    if(action==='delete-group-product')window.deleteGroupProductLine(code,rowId);
+    if(action==='edit-tier')window.editTierLine(code,rowId);
+    if(action==='delete-tier')window.deleteTierLine(code,rowId);
+  });
   document.querySelectorAll('[data-promotion-program-tab]').forEach(btn=>btn.addEventListener('click',()=>activateProgramTab(btn.dataset.promotionProgramTab)));
-  searchInput?.addEventListener('input',()=>loadPromotionProgramsByType(activeType));
+  searchInput?.addEventListener('input',()=>{
+    clearTimeout(promotionProgramSearchTimer);
+    promotionProgramSearchTimer=setTimeout(()=>loadPromotionProgramsByType(activeType),250);
+  });
   activateProgramTab(activeType);
   loadAllPromotionProgramTabs();
 })();

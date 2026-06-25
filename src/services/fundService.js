@@ -1,1063 +1,194 @@
-'use strict';
-
-const dateUtil = require('../utils/date.util');
-const { makeId, normalizeText, toNumber } = require('../utils/common.util');
-const { withMongoTransaction } = require('../utils/transaction.util');
-const fundLedgerRepository = require('../repositories/fundLedgerRepository');
-const deliveryCashSubmissionRepository = require('../repositories/deliveryCashSubmissionRepository');
-const expenseVoucherRepository = require('../repositories/expenseVoucherRepository');
-const fundTransferRepository = require('../repositories/fundTransferRepository');
-const deliveryCashShortageRepository = require('../repositories/deliveryCashShortageRepository');
-const deliveryShortageRepaymentRepository = require('../repositories/deliveryShortageRepaymentRepository');
-const auditService = require('./auditService');
-function getMasterOrderDeliveryService() {
-  return require('./master-order/masterOrderDelivery.service');
-}
-const { pickDeliveryStaffCode } = require('../domain/staff/staffIdentity');
-
-function dateOnly(value) { return dateUtil.toDateOnly(value || dateUtil.todayVN()); }
-function money(value) { return Math.max(0, Math.round(toNumber(value))); }
-function activeStatus(row = {}) { return !['void', 'cancelled', 'canceled', 'deleted'].includes(String(row.status || '').toLowerCase()); }
-
-function canonicalFundType(value) {
-  return String(value || 'cash').toLowerCase() === 'bank' ? 'bank' : 'cash';
-}
-
-function canonicalDirection(value) {
-  return String(value || 'in').toLowerCase() === 'out' ? 'out' : 'in';
-}
-
-function canonicalAccount(value, fundType) {
-  const raw = String(value || '').trim();
-  return (raw || String(fundType || 'cash')).toUpperCase();
-}
-
-function normalizeKeyPart(value) {
-  return String(value || '').trim().toUpperCase();
-}
-
-function buildFundLedgerIdempotencyKey(input = {}) {
-  const fundType = canonicalFundType(input.fundType);
-  const direction = canonicalDirection(input.direction);
-  const account = canonicalAccount(input.account, fundType);
-  const sourceType = String(input.sourceType || 'MANUAL_FUND').trim() || 'MANUAL_FUND';
-  const sourceIdentity = String(
-    input.sourceId ||
-    input.sourceCode ||
-    input.referenceId ||
-    input.referenceCode ||
-    input.refId ||
-    input.refCode ||
-    input.id ||
-    input.code ||
-    ''
-  ).trim();
-  if (!sourceIdentity) return '';
-  return [sourceType, sourceIdentity, fundType, direction, account].map(normalizeKeyPart).join('|');
-}
-
-
-function buildCode(prefix, rows = []) {
-  const max = rows.reduce((result, row) => {
-    const match = String(row.code || '').match(/(\d+)$/);
-    return Math.max(result, match ? Number(match[1]) : 0);
-  }, 0);
-  return `${prefix}${String(max + 1).padStart(5, '0')}`;
-}
-async function nextFundLedgerCode() { return buildCode('FL', await fundLedgerRepository.findAll()); }
-async function nextExpenseCode() { return buildCode('PC', await expenseVoucherRepository.findAll()); }
-async function nextTransferCode() { return buildCode('CQ', await fundTransferRepository.findAll()); }
-
-function deliverySubmissionCode(deliveryDate, deliveryStaffCode) {
-  const d = String(dateOnly(deliveryDate)).replace(/-/g, '');
-  const staff = String(deliveryStaffCode || 'NO_NVGH').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'NO_NVGH';
-  return `NQGH-${d}-${staff}`;
-}
-
-function deliveryShortageCode(submissionCode, fundType) {
-  const suffix = canonicalFundType(fundType) === 'bank' ? 'TK' : 'TM';
-  return `DCSH-${String(submissionCode || '').trim()}-${suffix}`;
-}
-
-function deliveryShortageRepaymentCode(shortage = {}, repaymentDate) {
-  const datePart = String(dateOnly(repaymentDate)).replace(/-/g, '');
-  const staffPart = String(shortage.deliveryStaffCode || 'NVGH').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20) || 'NVGH';
-  const uniquePart = String(Date.now()).slice(-7) + String(Math.floor(Math.random() * 100)).padStart(2, '0');
-  return `NQBU-${datePart}-${staffPart}-${uniquePart}`;
-}
-
-const SHORTAGE_REASON_CONFIG = {
-  cash: {
-    collected_not_remitted: { responsibleType: 'delivery_staff', status: 'open' },
-    customer_not_paid: { responsibleType: 'customer', status: 'customer_outstanding' },
-    approved_expense: { responsibleType: 'adjustment', status: 'adjusted', requireNote: true },
-    pending_review: { responsibleType: 'pending', status: 'disputed', requireNote: true }
-  },
-  bank: {
-    pending_bank_reconciliation: { responsibleType: 'pending', status: 'pending_reconciliation' },
-    delivery_staff_liability: { responsibleType: 'delivery_staff', status: 'open' },
-    customer_not_paid: { responsibleType: 'customer', status: 'customer_outstanding' },
-    approved_adjustment: { responsibleType: 'adjustment', status: 'adjusted', requireNote: true }
-  }
-};
-
-function shortageAmountFromDifference(value) {
-  return Math.max(0, -Math.round(toNumber(value)));
-}
-
-function shortageResolutionInput(body = {}, fundType) {
-  const nested = body.shortageResolution && typeof body.shortageResolution === 'object'
-    ? body.shortageResolution[fundType]
-    : null;
-  return nested || body[`${fundType}ShortageResolution`] || null;
-}
-
-function normalizeShortageResolution(body = {}, fundType, shortageAmount) {
-  if (shortageAmount <= 0) return null;
-  const raw = shortageResolutionInput(body, fundType);
-  const input = typeof raw === 'string' ? { reasonType: raw } : (raw || {});
-  const reasonType = String(input.reasonType || input.reason || '').trim();
-  const config = SHORTAGE_REASON_CONFIG[fundType]?.[reasonType];
-  if (!config) {
-    return {
-      error: fundType === 'bank'
-        ? 'Cần chọn cách xử lý khoản thiếu chuyển khoản trước khi xác nhận'
-        : 'Cần chọn cách xử lý khoản thiếu tiền mặt trước khi xác nhận',
-      fundType,
-      shortageAmount
-    };
-  }
-  const note = String(input.note || body.shortageNote || '').trim();
-  if (config.requireNote && !note) {
-    return {
-      error: 'Cần nhập ghi chú giải trình cho cách xử lý khoản thiếu đã chọn',
-      fundType,
-      shortageAmount
-    };
-  }
-  const adjustedAmount = config.responsibleType === 'adjustment' ? shortageAmount : 0;
-  return {
-    fundType,
-    reasonType,
-    responsibleType: config.responsibleType,
-    status: config.status,
-    originalShortageAmount: shortageAmount,
-    settledAmount: 0,
-    adjustedAmount,
-    outstandingAmount: Math.max(0, shortageAmount - adjustedAmount),
-    note
-  };
-}
-
-function prepareDeliveryShortagePlans(submission = {}, body = {}) {
-  const amounts = {
-    cash: shortageAmountFromDifference(
-      body.differenceCashAmount ?? submission.differenceCashAmount ??
-      (money(body.submittedCashAmount ?? submission.submittedCashAmount) - money(submission.reportCashAmount))
-    ),
-    bank: shortageAmountFromDifference(
-      body.differenceBankAmount ?? submission.differenceBankAmount ??
-      (money(body.submittedBankAmount ?? submission.submittedBankAmount) - money(submission.reportBankAmount))
-    )
-  };
-  const plans = [];
-  const requirements = [];
-  for (const fundType of ['cash', 'bank']) {
-    if (amounts[fundType] <= 0) continue;
-    const normalized = normalizeShortageResolution(body, fundType, amounts[fundType]);
-    if (normalized?.error) requirements.push(normalized);
-    else plans.push(normalized);
-  }
-  if (requirements.length) {
-    return {
-      error: requirements.map((item) => item.error).join('. '),
-      status: 422,
-      requiresShortageResolution: true,
-      shortages: requirements
-    };
-  }
-  return { plans, amounts };
-}
-
-function buildDeliveryShortageRecord(submission = {}, plan = {}, actor = '') {
-  const now = dateUtil.nowIso();
-  return {
-    id: deliveryShortageCode(submission.code, plan.fundType),
-    code: deliveryShortageCode(submission.code, plan.fundType),
-    sourceSubmissionId: String(submission.id || '').trim(),
-    sourceSubmissionCode: String(submission.code || '').trim(),
-    deliveryDate: String(submission.deliveryDate || '').trim(),
-    deliveryStaffCode: String(submission.deliveryStaffCode || '').trim(),
-    deliveryStaffName: String(submission.deliveryStaffName || '').trim(),
-    fundType: canonicalFundType(plan.fundType),
-    reasonType: String(plan.reasonType || '').trim(),
-    responsibleType: String(plan.responsibleType || '').trim(),
-    originalShortageAmount: money(plan.originalShortageAmount),
-    settledAmount: money(plan.settledAmount),
-    adjustedAmount: money(plan.adjustedAmount),
-    pendingRepaymentAmount: 0,
-    outstandingAmount: money(plan.outstandingAmount),
-    status: String(plan.status || 'open').trim(),
-    note: String(plan.note || '').trim(),
-    classifiedBy: String(actor || '').trim(),
-    classifiedAt: now,
-    createdBy: String(actor || '').trim(),
-    createdAt: now,
-    updatedAt: now
-  };
-}
-
-async function persistDeliveryShortagePlans(submission, plans = [], actor = '', options = {}) {
-  const saved = [];
-  for (const plan of plans) {
-    const existing = await deliveryCashShortageRepository.findBySourceAndFundType(
-      submission.id,
-      submission.code,
-      plan.fundType,
-      options
-    );
-    if (existing) {
-      saved.push(existing);
-      continue;
-    }
-    const shortage = buildDeliveryShortageRecord(submission, plan, actor);
-    await deliveryCashShortageRepository.upsert(shortage, options);
-    saved.push(shortage);
-  }
-  return saved;
-}
-
-function shortageMapKey(sourceId, sourceCode) {
-  return String(sourceId || sourceCode || '').trim();
-}
-
-function matchQuery(row, q) {
-  if (!q) return true;
-  return [row.code, row.sourceCode, row.sourceType, row.deliveryStaffCode, row.deliveryStaffName, row.customerCode, row.customerName, row.staffName, row.note, row.status]
-    .some((value) => normalizeText(value).includes(q));
-}
-
-function summarizeFundLedgers(rows = []) {
-  const active = rows.filter(activeStatus);
-  const cashIn = active.filter((e) => e.fundType === 'cash' && e.direction === 'in').reduce((sum, e) => sum + toNumber(e.amount), 0);
-  const cashOut = active.filter((e) => e.fundType === 'cash' && e.direction === 'out').reduce((sum, e) => sum + toNumber(e.amount), 0);
-  const bankIn = active.filter((e) => e.fundType === 'bank' && e.direction === 'in').reduce((sum, e) => sum + toNumber(e.amount), 0);
-  const bankOut = active.filter((e) => e.fundType === 'bank' && e.direction === 'out').reduce((sum, e) => sum + toNumber(e.amount), 0);
-  return { cashIn, cashOut, cashBalance: cashIn - cashOut, bankIn, bankOut, bankBalance: bankIn - bankOut, totalIn: cashIn + bankIn, totalOut: cashOut + bankOut, totalBalance: cashIn + bankIn - cashOut - bankOut };
-}
-
-async function listFundLedgers(query = {}) {
-  const filter = {
-    status: { $nin: ['void', 'cancelled', 'canceled', 'deleted'] }
-  };
-  if (query.fundType && query.fundType !== 'all') filter.fundType = String(query.fundType);
-  if (query.direction && query.direction !== 'all') filter.direction = String(query.direction);
-  const dateFrom = query.dateFrom ? dateOnly(query.dateFrom) : '';
-  const dateTo = query.dateTo ? dateOnly(query.dateTo) : '';
-  if (dateFrom || dateTo) filter.date = { ...(dateFrom ? { $gte: dateFrom } : {}), ...(dateTo ? { $lte: dateTo } : {}) };
-
-  const q = String(query.q || query.search || '').trim();
-  if (q) {
-    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const rx = new RegExp(escaped, 'i');
-    filter.$or = [
-      'code', 'sourceCode', 'sourceType', 'deliveryStaffCode', 'deliveryStaffName',
-      'customerCode', 'customerName', 'staffName', 'note', 'status'
-    ].map((field) => ({ [field]: rx }));
-  }
-
-  const page = Math.max(Number(query.page || 1), 1);
-  const limit = Math.min(Math.max(Number(query.limit || 50), 1), 200);
-  const skip = (page - 1) * limit;
-  const result = await fundLedgerRepository.aggregate([
-    { $match: filter },
-    {
-      $facet: {
-        rows: [
-          { $sort: { date: -1, createdAt: -1, code: -1 } },
-          { $skip: skip },
-          { $limit: limit }
-        ],
-        totals: [
-          {
-            $group: {
-              _id: { fundType: '$fundType', direction: '$direction' },
-              amount: { $sum: { $ifNull: ['$amount', 0] } },
-              count: { $sum: 1 }
-            }
-          }
-        ],
-        count: [{ $count: 'total' }]
-      }
-    }
-  ]);
-
-  const facet = result[0] || { rows: [], totals: [], count: [] };
-  const summaryRows = (facet.totals || []).map((row) => ({
-    fundType: row._id?.fundType,
-    direction: row._id?.direction,
-    amount: toNumber(row.amount),
-    count: toNumber(row.count)
-  }));
-  const summary = summarizeFundLedgers(summaryRows.map((row) => ({
-    fundType: row.fundType,
-    direction: row.direction,
-    amount: row.amount,
-    status: 'posted'
-  })));
-  const total = toNumber(facet.count?.[0]?.total);
-
-  return {
-    fundLedgers: facet.rows || [],
-    items: facet.rows || [],
-    summary: { ...summary, groups: summaryRows },
-    meta: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-      hasMore: skip + (facet.rows || []).length < total
-    }
-  };
-}
-
-async function findExistingFundLedger(sourceType, sourceCode, fundType, direction, sourceId = '', account = '') {
-  const key = buildFundLedgerIdempotencyKey({ sourceType, sourceCode, sourceId, fundType, direction, account });
-  if (key) {
-    const existedByKey = await fundLedgerRepository.findByIdempotencyKey(key);
-    if (existedByKey) return existedByKey;
-  }
-  const query = {
-    fundType,
-    direction,
-    $or: [
-      { sourceType, sourceCode },
-      { referenceType: sourceType, referenceCode: sourceCode }
-    ]
-  };
-  if (account) query.account = account;
-  if (sourceId) query.$or.push({ sourceType, sourceId }, { referenceType: sourceType, referenceId: sourceId });
-  const rows = await fundLedgerRepository.findAll(query, { limit: 1 });
-  return rows[0] || null;
-}
-
-async function postFundLedger(input = {}, options = {}) {
-  const amount = money(input.amount);
-  if (amount <= 0) return null;
-  const fundType = canonicalFundType(input.fundType);
-  const direction = canonicalDirection(input.direction);
-  const account = canonicalAccount(input.account, fundType);
-  const sourceType = String(input.sourceType || 'MANUAL_FUND').trim();
-  const sourceId = String(input.sourceId || input.refId || input.referenceId || '').trim();
-  const sourceCode = String(input.sourceCode || input.refCode || input.referenceCode || '').trim();
-  const idempotencyKey = String(input.idempotencyKey || buildFundLedgerIdempotencyKey({ ...input, sourceType, sourceId, sourceCode, fundType, direction, account })).trim();
-  if (!idempotencyKey) throw new Error('Thiếu sourceId/sourceCode để tạo idempotencyKey cho fund ledger');
-
-  const existed = await fundLedgerRepository.findByIdempotencyKey(idempotencyKey, options);
-  if (existed) {
-    return {
-      ok: true,
-      skipped: true,
-      ledger: existed,
-      reason: 'DUPLICATE_FUND_LEDGER'
-    };
-  }
-
-  const entry = {
-    id: String(input.id || makeId('FL')).trim(),
-    code: String(input.code || await nextFundLedgerCode()).trim(),
-    date: dateOnly(input.date),
-    fundType,
-    direction,
-    account,
-    idempotencyKey,
-    amount,
-    sourceType,
-    sourceId,
-    sourceCode,
-    refType: String(input.refType || sourceType).trim(),
-    refId: String(input.refId || sourceId).trim(),
-    refCode: String(input.refCode || sourceCode).trim(),
-    referenceType: String(input.referenceType || input.refType || sourceType).trim(),
-    referenceId: String(input.referenceId || input.refId || sourceId).trim(),
-    referenceCode: String(input.referenceCode || input.refCode || sourceCode).trim(),
-    deliveryDate: String(input.deliveryDate || '').trim(),
-    deliveryStaffCode: String(input.deliveryStaffCode || '').trim(),
-    deliveryStaffName: String(input.deliveryStaffName || '').trim(),
-    customerCode: String(input.customerCode || '').trim(),
-    customerName: String(input.customerName || '').trim(),
-    staffCode: String(input.staffCode || '').trim(),
-    staffName: String(input.staffName || '').trim(),
-    note: String(input.note || '').trim(),
-    status: String(input.status || 'posted').trim(),
-    createdBy: String(input.createdBy || '').trim(),
-    createdAt: input.createdAt || dateUtil.nowIso(),
-    updatedAt: dateUtil.nowIso()
-  };
-
-  try {
-    await fundLedgerRepository.upsert(entry, options);
-    return entry;
-  } catch (error) {
-    if (error && (error.code === 11000 || String(error.message || '').includes('duplicate key'))) {
-      const duplicate = await fundLedgerRepository.findByIdempotencyKey(idempotencyKey, options);
-      if (duplicate) return { ok: true, skipped: true, ledger: duplicate, reason: 'DUPLICATE_FUND_LEDGER' };
-    }
-    throw error;
-  }
-}
-
-function numberFromRow(row, keys = []) {
-  for (const key of keys) {
-    const value = toNumber(row[key]);
-    if (value > 0) return value;
-  }
-  return 0;
-}
-
-async function buildDeliverySubmissionDraft(query = {}) {
-  const deliveryDate = dateOnly(query.deliveryDate || query.date);
-  const deliveryStaffCode = String(pickDeliveryStaffCode(query) || query.delivery || '').trim();
-  if (!deliveryStaffCode) return { error: 'Thiếu nhân viên giao hàng để tạo phiếu nộp quỹ', status: 400 };
-  const deliveryService = getMasterOrderDeliveryService();
-  const listDeliveryOrders = typeof deliveryService.listDeliveryTodayOrdersCompact === 'function'
-    ? deliveryService.listDeliveryTodayOrdersCompact
-    : deliveryService.listDeliveryToday;
-  const data = await listDeliveryOrders({ date: deliveryDate, delivery: deliveryStaffCode, deliveryStaffCode, page: 1, limit: 5000 });
-  const selectedStaffCode = normalizeText(deliveryStaffCode);
-  const orders = (data.orders || data.rows || []).filter((row) => (
-    normalizeText(pickDeliveryStaffCode(row) || row.deliveryStaffCode) === selectedStaffCode
-  ));
-  if (!orders.length) return { error: 'Không có đơn giao để tạo phiếu nộp quỹ', status: 404 };
-  const deliveryStaffName = orders.find((row) => row.deliveryStaffName)?.deliveryStaffName || deliveryStaffCode;
-  const reportCurrentOrderCashAmount = orders.reduce((sum, row) => sum + numberFromRow(row, ['cashAmount', 'cashCollected']), 0);
-  const reportCurrentOrderBankAmount = orders.reduce((sum, row) => sum + numberFromRow(row, ['bankAmount', 'bankCollected', 'transferAmount']), 0);
-  const reportOldDebtCashAmount = orders.reduce((sum, row) => sum + numberFromRow(row, ['oldDebtCashCollected', 'debtCashCollected', 'arCashCollected']), 0);
-  const reportOldDebtBankAmount = orders.reduce((sum, row) => sum + numberFromRow(row, ['oldDebtBankCollected', 'debtBankCollected', 'arBankCollected']), 0);
-  const reportCashAmount = reportCurrentOrderCashAmount + reportOldDebtCashAmount;
-  const reportBankAmount = reportCurrentOrderBankAmount + reportOldDebtBankAmount;
-  const code = deliverySubmissionCode(deliveryDate, deliveryStaffCode);
-  const submittedCashAmount = money(query.submittedCashAmount ?? reportCashAmount);
-  const submittedBankAmount = money(query.submittedBankAmount ?? reportBankAmount);
-  return {
-    draft: {
-      id: String(query.id || makeId('NQGH')).trim(),
-      code,
-      deliveryDate,
-      deliveryStaffCode,
-      deliveryStaffName,
-      reportCashAmount,
-      reportBankAmount,
-      reportCurrentOrderCashAmount,
-      reportCurrentOrderBankAmount,
-      reportOldDebtCashAmount,
-      reportOldDebtBankAmount,
-      submittedCashAmount,
-      submittedBankAmount,
-      differenceCashAmount: submittedCashAmount - reportCashAmount,
-      differenceBankAmount: submittedBankAmount - reportBankAmount,
-      orderCodes: orders.map((row) => row.orderCode || row.code || '').filter(Boolean),
-      orderIds: orders.map((row) => row.id || '').filter(Boolean),
-      status: String(query.status || 'pending').trim(),
-      matchStatus: (submittedCashAmount === reportCashAmount && submittedBankAmount === reportBankAmount) ? 'matched' : 'mismatch',
-      fundPosted: false,
-      note: String(query.note || '').trim(),
-      createdBy: String(query.createdBy || '').trim(),
-      createdAt: dateUtil.nowIso(),
-      updatedAt: dateUtil.nowIso()
-    },
-    orders,
-    deliverySummary: data.summary || data.kpi || {}
-  };
-}
-
-async function createDeliveryCashSubmission(body = {}) {
-  const built = await buildDeliverySubmissionDraft(body);
-  if (built.error) return built;
-  const draft = built.draft;
-  const existed = await deliveryCashSubmissionRepository.findByIdOrCode(draft.code);
-  if (existed && !['cancelled', 'canceled', 'void', 'deleted'].includes(String(existed.status || '').toLowerCase())) {
-    return { error: `Đã có phiếu nộp quỹ ${existed.code} cho ngày/NVGH này`, status: 409, submission: existed };
-  }
-  await deliveryCashSubmissionRepository.upsert(draft);
-  return { submission: draft, orders: built.orders };
-}
-
-async function listDeliveryCashSubmissions(query = {}) {
-  const filter = {};
-  if (query.deliveryDate || query.date) filter.deliveryDate = dateOnly(query.deliveryDate || query.date);
-  if (pickDeliveryStaffCode(query) || query.delivery) filter.deliveryStaffCode = String(pickDeliveryStaffCode(query) || query.delivery).trim();
-  let rows = await deliveryCashSubmissionRepository.findAll(filter, { sort: { deliveryDate: -1, createdAt: -1, code: -1 }, limit: query.limit || 500 });
-  const q = normalizeText(query.q || query.search || '');
-  if (q) rows = rows.filter((row) => matchQuery(row, q));
-  if (!rows.length) return { submissions: [] };
-
-  const ids = rows.map((row) => String(row.id || '').trim()).filter(Boolean);
-  const codes = rows.map((row) => String(row.code || '').trim()).filter(Boolean);
-  const sourceFilter = [];
-  if (ids.length) sourceFilter.push({ sourceSubmissionId: { $in: ids } });
-  if (codes.length) sourceFilter.push({ sourceSubmissionCode: { $in: codes } });
-  const shortageRows = sourceFilter.length
-    ? await deliveryCashShortageRepository.findAll({ $or: sourceFilter }, { limit: Math.min(1000, rows.length * 3) })
-    : [];
-  const shortageBySource = new Map();
-  for (const shortage of shortageRows) {
-    const keys = [shortageMapKey(shortage.sourceSubmissionId, ''), shortageMapKey('', shortage.sourceSubmissionCode)].filter(Boolean);
-    for (const key of keys) {
-      if (!shortageBySource.has(key)) shortageBySource.set(key, {});
-      shortageBySource.get(key)[canonicalFundType(shortage.fundType)] = shortage;
-    }
-  }
-  rows = rows.map((row) => {
-    const shortages = shortageBySource.get(shortageMapKey(row.id, '')) || shortageBySource.get(shortageMapKey('', row.code)) || {};
-    return {
-      ...row,
-      cashShortage: shortages.cash || null,
-      bankShortage: shortages.bank || null
-    };
-  });
-  return { submissions: rows };
-}
-
-
-function isLockedVoucher(row = {}) {
-  return ['confirmed', 'matched', 'posted'].includes(String(row.status || '').toLowerCase()) || row.fundPosted === true;
-}
-
-function lockedError(name) {
-  return { error: `${name} đã xác nhận, không được sửa nghiệp vụ`, status: 409 };
-}
-
-function isSameDeliveryCashSubmission(left = {}, right = {}) {
-  const leftId = String(left.id || '').trim();
-  const rightId = String(right.id || '').trim();
-  if (leftId && rightId) return leftId === rightId;
-  const leftCode = String(left.code || '').trim();
-  const rightCode = String(right.code || '').trim();
-  return Boolean(leftCode && rightCode && leftCode === rightCode);
-}
-
-async function updateDeliveryCashSubmission(idOrCode, body = {}) {
-  const current = await deliveryCashSubmissionRepository.findByIdOrCode(idOrCode);
-  if (!current) return { error: 'Không tìm thấy phiếu nộp quỹ', status: 404 };
-  if (isLockedVoucher(current)) return lockedError('Phiếu nộp quỹ');
-
-  const submittedCashAmount = money(body.submittedCashAmount ?? current.submittedCashAmount ?? current.reportCashAmount);
-  const submittedBankAmount = money(body.submittedBankAmount ?? current.submittedBankAmount ?? current.reportBankAmount);
-  const deliveryDate = body.deliveryDate ?? body.date ?? current.deliveryDate;
-  const deliveryStaffCode = String(
-    pickDeliveryStaffCode(body) || body.delivery || current.deliveryStaffCode || ''
-  ).trim();
-
-  // Rebuild the report snapshot from the current delivery orders. Previously an edit
-  // only changed submitted amounts, leaving reportCashAmount/reportBankAmount stale.
-  const rebuilt = await buildDeliverySubmissionDraft({
-    ...current,
-    ...body,
-    id: current.id,
-    deliveryDate,
-    deliveryStaffCode,
-    submittedCashAmount,
-    submittedBankAmount,
-    status: 'pending',
-    note: String(body.note ?? current.note ?? '').trim(),
-    createdBy: current.createdBy || body.createdBy || ''
-  });
-  if (rebuilt.error) return rebuilt;
-
-  const refreshed = rebuilt.draft;
-  if (String(refreshed.code || '') !== String(current.code || '')) {
-    const collision = await deliveryCashSubmissionRepository.findByIdOrCode(refreshed.code);
-    if (collision && !isSameDeliveryCashSubmission(current, collision)) {
-      return {
-        error: `Đã có phiếu nộp quỹ ${refreshed.code} cho ngày/NVGH này`,
-        status: 409,
-        submission: collision
-      };
-    }
-  }
-
-  const updated = {
-    ...current,
-    ...refreshed,
-    id: current.id || refreshed.id,
-    createdBy: current.createdBy || refreshed.createdBy || '',
-    createdAt: current.createdAt || refreshed.createdAt,
-    status: 'pending',
-    fundPosted: false,
-    postedAt: '',
-    confirmedAt: '',
-    confirmedBy: '',
-    updatedAt: dateUtil.nowIso()
-  };
-
-  const persisted = await deliveryCashSubmissionRepository.patchByIdOrCode(idOrCode, updated);
-  if (!persisted) return { error: 'Phiếu nộp quỹ đã thay đổi hoặc không còn tồn tại', status: 409 };
-  return {
-    submission: persisted,
-    orders: rebuilt.orders,
-    message: 'Đã cập nhật phiếu nộp quỹ và đồng bộ lại số báo cáo theo ngày/NVGH'
-  };
-}
-
-
-async function listExpenseVouchers(query = {}) {
-  const filter = {};
-  if (query.dateFrom || query.dateTo) {
-    const dateFrom = query.dateFrom ? dateOnly(query.dateFrom) : '';
-    const dateTo = query.dateTo ? dateOnly(query.dateTo) : '';
-    filter.date = { ...(dateFrom ? { $gte: dateFrom } : {}), ...(dateTo ? { $lte: dateTo } : {}) };
-  }
-  if (query.fundType && query.fundType !== 'all') filter.fundType = String(query.fundType);
-  let rows = await expenseVoucherRepository.findAll(filter, { sort: { date: -1, createdAt: -1, code: -1 }, limit: query.limit || 500 });
-  const q = normalizeText(query.q || query.search || '');
-  if (q) rows = rows.filter((row) => [row.code, row.expenseType, row.receiverName, row.note, row.status].some((value) => normalizeText(value).includes(q)));
-  return { vouchers: rows };
-}
-
-async function listFundTransfers(query = {}) {
-  const filter = {};
-  if (query.dateFrom || query.dateTo) {
-    const dateFrom = query.dateFrom ? dateOnly(query.dateFrom) : '';
-    const dateTo = query.dateTo ? dateOnly(query.dateTo) : '';
-    filter.date = { ...(dateFrom ? { $gte: dateFrom } : {}), ...(dateTo ? { $lte: dateTo } : {}) };
-  }
-  let rows = await fundTransferRepository.findAll(filter, { sort: { date: -1, createdAt: -1, code: -1 }, limit: query.limit || 500 });
-  const q = normalizeText(query.q || query.search || '');
-  if (q) rows = rows.filter((row) => [row.code, row.fromFund, row.toFund, row.bankName, row.note, row.status].some((value) => normalizeText(value).includes(q)));
-  return { transfers: rows };
-}
-
-async function confirmDeliveryCashSubmission(idOrCode, body = {}) {
-  const submission = await deliveryCashSubmissionRepository.findByIdOrCode(idOrCode);
-  if (!submission) return { error: 'Không tìm thấy phiếu nộp quỹ', status: 404 };
-  if (['cancelled', 'canceled', 'void', 'deleted'].includes(String(submission.status || '').toLowerCase())) return { error: 'Phiếu nộp quỹ đã hủy', status: 400 };
-  if (submission.fundPosted || String(submission.status || '').toLowerCase() === 'confirmed') {
-    return { submission, ledgers: [], message: 'Phiếu đã ghi sổ quỹ trước đó' };
-  }
-
-  const submittedCashAmount = money(body.submittedCashAmount ?? submission.submittedCashAmount ?? submission.reportCashAmount);
-  const submittedBankAmount = money(body.submittedBankAmount ?? submission.submittedBankAmount ?? submission.reportBankAmount);
-  const differenceCashAmount = submittedCashAmount - money(submission.reportCashAmount);
-  const differenceBankAmount = submittedBankAmount - money(submission.reportBankAmount);
-  const actor = String(body.confirmedBy || body.updatedBy || body.actorCode || '').trim();
-  const shortagePlanResult = prepareDeliveryShortagePlans({
-    ...submission,
-    submittedCashAmount,
-    submittedBankAmount,
-    differenceCashAmount,
-    differenceBankAmount
-  }, {
-    ...body,
-    submittedCashAmount,
-    submittedBankAmount,
-    differenceCashAmount,
-    differenceBankAmount
-  });
-  if (shortagePlanResult.error) return shortagePlanResult;
-
-  const updated = {
-    ...submission,
-    submittedCashAmount,
-    submittedBankAmount,
-    differenceCashAmount,
-    differenceBankAmount,
-    matchStatus: differenceCashAmount === 0 && differenceBankAmount === 0 ? 'matched' : 'mismatch',
-    status: 'confirmed',
-    fundPosted: true,
-    postedAt: dateUtil.nowIso(),
-    confirmedAt: dateUtil.nowIso(),
-    confirmedBy: actor,
-    shortageClassifiedAt: shortagePlanResult.plans.length ? dateUtil.nowIso() : '',
-    shortageClassifiedBy: shortagePlanResult.plans.length ? actor : '',
-    note: String(body.note ?? submission.note ?? '').trim(),
-    updatedAt: dateUtil.nowIso()
-  };
-  const ledgers = [];
-  let shortages = [];
-  await withMongoTransaction(async (session) => {
-    await deliveryCashSubmissionRepository.upsert(updated, { session });
-    if (submittedCashAmount > 0) ledgers.push(await postFundLedger({
-      date: updated.deliveryDate,
-      fundType: 'cash',
-      direction: 'in',
-      amount: submittedCashAmount,
-      sourceType: 'DELIVERY_CASH_SUBMISSION',
-      sourceId: updated.id,
-      sourceCode: updated.code,
-      deliveryDate: updated.deliveryDate,
-      deliveryStaffCode: updated.deliveryStaffCode,
-      deliveryStaffName: updated.deliveryStaffName,
-      createdBy: actor,
-      note: `NVGH ${updated.deliveryStaffName || updated.deliveryStaffCode} nộp tiền mặt giao hàng ngày ${updated.deliveryDate}`
-    }, { session }));
-    if (submittedBankAmount > 0) ledgers.push(await postFundLedger({
-      date: updated.deliveryDate,
-      fundType: 'bank',
-      direction: 'in',
-      amount: submittedBankAmount,
-      sourceType: 'DELIVERY_CASH_SUBMISSION',
-      sourceId: updated.id,
-      sourceCode: updated.code,
-      deliveryDate: updated.deliveryDate,
-      deliveryStaffCode: updated.deliveryStaffCode,
-      deliveryStaffName: updated.deliveryStaffName,
-      createdBy: actor,
-      note: `NVGH ${updated.deliveryStaffName || updated.deliveryStaffCode} đối soát chuyển khoản giao hàng ngày ${updated.deliveryDate}`
-    }, { session }));
-    shortages = await persistDeliveryShortagePlans(updated, shortagePlanResult.plans, actor, { session });
-  });
-  await auditService.log('DELIVERY_CASH_SUBMISSION_CONFIRMED', {
-    refType: 'DELIVERY_CASH_SUBMISSION',
-    refId: updated.id,
-    refCode: updated.code,
-    user: actor,
-    summary: {
-      submittedCashAmount,
-      submittedBankAmount,
-      differenceCashAmount,
-      differenceBankAmount,
-      shortageCodes: shortages.map((row) => row.code)
-    },
-    note: `Xác nhận phiếu nộp quỹ ${updated.code}`
-  });
-  return { submission: updated, ledgers: ledgers.filter(Boolean), shortages, message: 'Đã xác nhận phiếu nộp quỹ, ghi fundLedgers và quản lý khoản thiếu' };
-}
-
-async function classifyConfirmedDeliveryShortages(idOrCode, body = {}) {
-  const submission = await deliveryCashSubmissionRepository.findByIdOrCode(idOrCode);
-  if (!submission) return { error: 'Không tìm thấy phiếu nộp quỹ', status: 404 };
-  if (!submission.fundPosted && String(submission.status || '').toLowerCase() !== 'confirmed') {
-    return { error: 'Chỉ phân loại bổ sung cho phiếu đã xác nhận', status: 409 };
-  }
-  const shortagePlanResult = prepareDeliveryShortagePlans(submission, body);
-  if (shortagePlanResult.error) return shortagePlanResult;
-  if (!shortagePlanResult.plans.length) return { error: 'Phiếu không có khoản thiếu cần phân loại', status: 400 };
-  const actor = String(body.classifiedBy || body.updatedBy || body.actorCode || '').trim();
-  let shortages = [];
-  const updated = {
-    ...submission,
-    shortageClassifiedAt: dateUtil.nowIso(),
-    shortageClassifiedBy: actor,
-    updatedAt: dateUtil.nowIso()
-  };
-  await withMongoTransaction(async (session) => {
-    shortages = await persistDeliveryShortagePlans(updated, shortagePlanResult.plans, actor, { session });
-    await deliveryCashSubmissionRepository.patchByIdOrCode(idOrCode, {
-      shortageClassifiedAt: updated.shortageClassifiedAt,
-      shortageClassifiedBy: updated.shortageClassifiedBy,
-      updatedAt: updated.updatedAt
-    }, { session });
-  });
-  await auditService.log('DELIVERY_CASH_SHORTAGE_CLASSIFIED', {
-    refType: 'DELIVERY_CASH_SUBMISSION',
-    refId: submission.id,
-    refCode: submission.code,
-    user: actor,
-    summary: { shortageCodes: shortages.map((row) => row.code) },
-    note: `Phân loại khoản thiếu cho phiếu ${submission.code}`
-  });
-  return { submission: updated, shortages, message: 'Đã lưu phân loại khoản thiếu của phiếu đã xác nhận' };
-}
-
-async function getDeliveryCashShortageHistory(idOrCode) {
-  const shortage = await deliveryCashShortageRepository.findByIdOrCode(idOrCode);
-  if (!shortage) return { error: 'Không tìm thấy khoản thiếu quỹ', status: 404 };
-  const repayments = await deliveryShortageRepaymentRepository.findAll(
-    { $or: [{ shortageId: shortage.id }, { shortageCode: shortage.code }] },
-    { sort: { createdAt: -1, code: -1 }, limit: 500 }
-  );
-  const pendingAmount = repayments
-    .filter((row) => String(row.status || '').toLowerCase() === 'pending')
-    .reduce((sum, row) => sum + money(row.amount), 0);
-  return {
-    shortage,
-    repayments,
-    summary: {
-      originalShortageAmount: money(shortage.originalShortageAmount),
-      settledAmount: money(shortage.settledAmount),
-      adjustedAmount: money(shortage.adjustedAmount),
-      outstandingAmount: money(shortage.outstandingAmount),
-      pendingAmount,
-      availableToRepay: Math.max(0, money(shortage.outstandingAmount) - pendingAmount)
-    }
-  };
-}
-
-async function createDeliveryShortageRepayment(idOrCode, body = {}) {
-  const amount = money(body.amount);
-  if (amount <= 0) return { error: 'Số tiền nộp bù phải lớn hơn 0', status: 400 };
-  const actor = String(body.createdBy || body.actorCode || '').trim();
-  let repayment = null;
-  let shortage = null;
-  await withMongoTransaction(async (session) => {
-    shortage = await deliveryCashShortageRepository.findByIdOrCode(idOrCode, { session });
-    if (!shortage) throw Object.assign(new Error('Không tìm thấy khoản thiếu quỹ'), { status: 404 });
-    if (String(shortage.responsibleType || '') !== 'delivery_staff') {
-      throw Object.assign(new Error('Khoản thiếu này không được ghi nhận là công nợ của NVGH'), { status: 409 });
-    }
-    if (!['open', 'partial'].includes(String(shortage.status || '').toLowerCase()) || money(shortage.outstandingAmount) <= 0) {
-      throw Object.assign(new Error('Khoản thiếu đã tất toán hoặc không còn được phép nộp bù'), { status: 409 });
-    }
-    const reservedShortage = await deliveryCashShortageRepository.reservePendingRepayment(
-      shortage.id || shortage.code,
-      amount,
-      dateUtil.nowIso(),
-      { session }
-    );
-    if (!reservedShortage) {
-      const pendingRows = await deliveryShortageRepaymentRepository.findAll(
-        { $or: [{ shortageId: shortage.id }, { shortageCode: shortage.code }], status: 'pending' },
-        { session, limit: 500 }
-      );
-      const pendingAmount = pendingRows.reduce((sum, row) => sum + money(row.amount), 0);
-      const available = Math.max(0, money(shortage.outstandingAmount) - pendingAmount);
-      throw Object.assign(new Error(`Số tiền nộp bù vượt số còn có thể lập phiếu (${available})`), { status: 409 });
-    }
-    shortage = reservedShortage;
-    const now = dateUtil.nowIso();
-    repayment = {
-      id: makeId('DSR'),
-      code: deliveryShortageRepaymentCode(shortage, body.repaymentDate || body.date),
-      shortageId: shortage.id,
-      shortageCode: shortage.code,
-      sourceSubmissionId: shortage.sourceSubmissionId,
-      sourceSubmissionCode: shortage.sourceSubmissionCode,
-      deliveryDate: shortage.deliveryDate,
-      deliveryStaffCode: shortage.deliveryStaffCode,
-      deliveryStaffName: shortage.deliveryStaffName,
-      repaymentDate: dateOnly(body.repaymentDate || body.date),
-      fundType: canonicalFundType(body.fundType || body.paymentMethod),
-      amount,
-      status: 'pending',
-      fundPosted: false,
-      note: String(body.note || '').trim(),
-      createdBy: actor,
-      createdAt: now,
-      updatedAt: now
-    };
-    await deliveryShortageRepaymentRepository.upsert(repayment, { session });
-  });
-  await auditService.log('DELIVERY_SHORTAGE_REPAYMENT_CREATED', {
-    refType: 'DELIVERY_CASH_SHORTAGE',
-    refId: shortage.id,
-    refCode: shortage.code,
-    user: actor,
-    summary: repayment,
-    note: `Tạo phiếu nộp bù ${repayment.code}`
-  });
-  return { shortage, repayment, message: 'Đã tạo phiếu nộp bù, chờ kế toán xác nhận ghi quỹ' };
-}
-
-async function confirmDeliveryShortageRepayment(idOrCode, body = {}) {
-  let repayment = await deliveryShortageRepaymentRepository.findByIdOrCode(idOrCode);
-  if (!repayment) return { error: 'Không tìm thấy phiếu nộp bù', status: 404 };
-  if (repayment.fundPosted || String(repayment.status || '').toLowerCase() === 'confirmed') {
-    const shortage = await deliveryCashShortageRepository.findByIdOrCode(repayment.shortageId || repayment.shortageCode);
-    return { repayment, shortage, ledger: null, message: 'Phiếu nộp bù đã ghi quỹ trước đó' };
-  }
-  if (String(repayment.status || '').toLowerCase() !== 'pending') return { error: 'Phiếu nộp bù không ở trạng thái chờ xác nhận', status: 409 };
-  const amount = money(repayment.amount);
-  if (amount <= 0) return { error: 'Số tiền nộp bù không hợp lệ', status: 400 };
-  const actor = String(body.confirmedBy || body.updatedBy || body.actorCode || '').trim();
-  let shortage = null;
-  let ledger = null;
-  await withMongoTransaction(async (session) => {
-    const currentRepayment = await deliveryShortageRepaymentRepository.findByIdOrCode(idOrCode, { session });
-    if (!currentRepayment || currentRepayment.fundPosted || String(currentRepayment.status || '') !== 'pending') {
-      throw Object.assign(new Error('Phiếu nộp bù đã được xử lý bởi phiên khác'), { status: 409 });
-    }
-    shortage = await deliveryCashShortageRepository.applyConfirmedRepayment(
-      currentRepayment.shortageId || currentRepayment.shortageCode,
-      amount,
-      dateUtil.nowIso(),
-      { session }
-    );
-    if (!shortage) throw Object.assign(new Error('Số tiền nộp bù vượt khoản còn thiếu hoặc khoản thiếu đã khóa'), { status: 409 });
-    const now = dateUtil.nowIso();
-    repayment = await deliveryShortageRepaymentRepository.markConfirmedIfPending(idOrCode, {
-      status: 'confirmed',
-      fundPosted: true,
-      postedAt: now,
-      confirmedAt: now,
-      confirmedBy: actor,
-      updatedAt: now
-    }, { session });
-    if (!repayment) throw Object.assign(new Error('Phiếu nộp bù đã được xác nhận trước đó'), { status: 409 });
-    ledger = await postFundLedger({
-      date: repayment.repaymentDate,
-      fundType: repayment.fundType,
-      direction: 'in',
-      amount,
-      sourceType: 'DELIVERY_SHORTAGE_REPAYMENT',
-      sourceId: repayment.id,
-      sourceCode: repayment.code,
-      deliveryDate: repayment.deliveryDate,
-      deliveryStaffCode: repayment.deliveryStaffCode,
-      deliveryStaffName: repayment.deliveryStaffName,
-      createdBy: actor,
-      note: repayment.note || `NVGH ${repayment.deliveryStaffName || repayment.deliveryStaffCode} nộp bù thiếu quỹ ${repayment.shortageCode}`
-    }, { session });
-  });
-  await auditService.log('DELIVERY_SHORTAGE_REPAYMENT_CONFIRMED', {
-    refType: 'DELIVERY_CASH_SHORTAGE',
-    refId: shortage.id,
-    refCode: shortage.code,
-    user: actor,
-    summary: { repaymentCode: repayment.code, amount, outstandingAmount: shortage.outstandingAmount },
-    note: `Xác nhận phiếu nộp bù ${repayment.code}`
-  });
-  return { repayment, shortage, ledger, message: 'Đã xác nhận nộp bù, tăng quỹ và giảm công nợ thiếu quỹ NVGH' };
-}
-
-
-async function createExpenseVoucher(body = {}) {
-  const amount = money(body.amount);
-  if (amount <= 0) return { error: 'Số tiền chi phải lớn hơn 0', status: 400 };
-  const voucher = {
-    id: String(body.id || makeId('PC')).trim(),
-    code: String(body.code || await nextExpenseCode()).trim(),
-    date: dateOnly(body.date),
-    fundType: String(body.fundType || 'cash').toLowerCase() === 'bank' ? 'bank' : 'cash',
-    amount,
-    expenseType: String(body.expenseType || 'other').trim(),
-    receiverName: String(body.receiverName || '').trim(),
-    note: String(body.note || '').trim(),
-    status: 'pending',
-    fundPosted: false,
-    createdBy: String(body.createdBy || '').trim(),
-    createdAt: dateUtil.nowIso(),
-    updatedAt: dateUtil.nowIso()
-  };
-  await expenseVoucherRepository.upsert(voucher);
-  return { voucher, message: 'Đã tạo phiếu chi, chờ xác nhận ghi sổ quỹ' };
-}
-
-async function updateExpenseVoucher(idOrCode, body = {}) {
-  const current = await expenseVoucherRepository.findByIdOrCode(idOrCode);
-  if (!current) return { error: 'Không tìm thấy phiếu chi', status: 404 };
-  if (isLockedVoucher(current)) return lockedError('Phiếu chi');
-  const amount = money(body.amount ?? current.amount);
-  if (amount <= 0) return { error: 'Số tiền chi phải lớn hơn 0', status: 400 };
-  const updated = {
-    ...current,
-    date: dateOnly(body.date || current.date),
-    fundType: String(body.fundType || current.fundType || 'cash').toLowerCase() === 'bank' ? 'bank' : 'cash',
-    amount,
-    expenseType: String(body.expenseType ?? current.expenseType ?? 'other').trim(),
-    receiverName: String(body.receiverName ?? current.receiverName ?? '').trim(),
-    note: String(body.note ?? current.note ?? '').trim(),
-    status: 'pending',
-    updatedAt: dateUtil.nowIso()
-  };
-  await expenseVoucherRepository.upsert(updated);
-  return { voucher: updated, message: 'Đã cập nhật phiếu chi' };
-}
-
-async function confirmExpenseVoucher(idOrCode, body = {}) {
-  const voucher = await expenseVoucherRepository.findByIdOrCode(idOrCode);
-  if (!voucher) return { error: 'Không tìm thấy phiếu chi', status: 404 };
-  if (['cancelled', 'canceled', 'void', 'deleted'].includes(String(voucher.status || '').toLowerCase())) return { error: 'Phiếu chi đã hủy', status: 400 };
-  if (voucher.fundPosted || String(voucher.status || '').toLowerCase() === 'confirmed') return { voucher, ledger: null, message: 'Phiếu chi đã ghi sổ quỹ trước đó' };
-  const amount = money(voucher.amount);
-  if (amount <= 0) return { error: 'Số tiền chi phải lớn hơn 0', status: 400 };
-  const updated = { ...voucher, status: 'confirmed', fundPosted: true, postedAt: dateUtil.nowIso(), confirmedAt: dateUtil.nowIso(), confirmedBy: String(body.confirmedBy || body.updatedBy || '').trim(), updatedAt: dateUtil.nowIso() };
-  let ledger = null;
-  await withMongoTransaction(async (session) => {
-    ledger = await postFundLedger({ date: updated.date, fundType: updated.fundType, direction: 'out', amount, sourceType: 'EXPENSE_VOUCHER', sourceId: updated.id, sourceCode: updated.code, referenceType: 'EXPENSE_VOUCHER', referenceId: updated.id, referenceCode: updated.code, note: updated.note || `Phiếu chi ${updated.code}` }, { session });
-    await expenseVoucherRepository.upsert(updated, { session });
-  });
-  return { voucher: updated, ledger, message: 'Đã xác nhận phiếu chi và ghi fundLedgers' };
-}
-
-async function createFundTransfer(body = {}) {
-  const amount = money(body.amount);
-  if (amount <= 0) return { error: 'Số tiền chuyển quỹ phải lớn hơn 0', status: 400 };
-  const fromFund = String(body.fromFund || 'cash').toLowerCase() === 'bank' ? 'bank' : 'cash';
-  const toFund = String(body.toFund || 'bank').toLowerCase() === 'cash' ? 'cash' : 'bank';
-  if (fromFund === toFund) return { error: 'Quỹ nguồn và quỹ đích không được trùng nhau', status: 400 };
-  const transfer = {
-    id: String(body.id || makeId('CQ')).trim(),
-    code: String(body.code || await nextTransferCode()).trim(),
-    date: dateOnly(body.date),
-    fromFund,
-    toFund,
-    amount,
-    bankName: String(body.bankName || '').trim(),
-    accountNumber: String(body.accountNumber || '').trim(),
-    note: String(body.note || '').trim(),
-    status: 'pending',
-    fundPosted: false,
-    createdBy: String(body.createdBy || '').trim(),
-    createdAt: dateUtil.nowIso(),
-    updatedAt: dateUtil.nowIso()
-  };
-  await fundTransferRepository.upsert(transfer);
-  return { transfer, message: 'Đã tạo phiếu chuyển quỹ, chờ xác nhận ghi sổ quỹ' };
-}
-
-async function updateFundTransfer(idOrCode, body = {}) {
-  const current = await fundTransferRepository.findByIdOrCode(idOrCode);
-  if (!current) return { error: 'Không tìm thấy phiếu chuyển quỹ', status: 404 };
-  if (isLockedVoucher(current)) return lockedError('Phiếu chuyển quỹ');
-  const amount = money(body.amount ?? current.amount);
-  if (amount <= 0) return { error: 'Số tiền chuyển quỹ phải lớn hơn 0', status: 400 };
-  const fromFund = String(body.fromFund || current.fromFund || 'cash').toLowerCase() === 'bank' ? 'bank' : 'cash';
-  const toFund = String(body.toFund || current.toFund || 'bank').toLowerCase() === 'cash' ? 'cash' : 'bank';
-  if (fromFund === toFund) return { error: 'Quỹ nguồn và quỹ đích không được trùng nhau', status: 400 };
-  const updated = {
-    ...current,
-    date: dateOnly(body.date || current.date),
-    fromFund,
-    toFund,
-    amount,
-    bankName: String(body.bankName ?? current.bankName ?? '').trim(),
-    accountNumber: String(body.accountNumber ?? current.accountNumber ?? '').trim(),
-    note: String(body.note ?? current.note ?? '').trim(),
-    status: 'pending',
-    updatedAt: dateUtil.nowIso()
-  };
-  await fundTransferRepository.upsert(updated);
-  return { transfer: updated, message: 'Đã cập nhật phiếu chuyển quỹ' };
-}
-
-async function confirmFundTransfer(idOrCode, body = {}) {
-  const transfer = await fundTransferRepository.findByIdOrCode(idOrCode);
-  if (!transfer) return { error: 'Không tìm thấy phiếu chuyển quỹ', status: 404 };
-  if (['cancelled', 'canceled', 'void', 'deleted'].includes(String(transfer.status || '').toLowerCase())) return { error: 'Phiếu chuyển quỹ đã hủy', status: 400 };
-  if (transfer.fundPosted || String(transfer.status || '').toLowerCase() === 'confirmed') return { transfer, ledgers: [], message: 'Phiếu chuyển quỹ đã ghi sổ quỹ trước đó' };
-  const amount = money(transfer.amount);
-  if (amount <= 0) return { error: 'Số tiền chuyển quỹ phải lớn hơn 0', status: 400 };
-  const updated = { ...transfer, status: 'confirmed', fundPosted: true, postedAt: dateUtil.nowIso(), confirmedAt: dateUtil.nowIso(), confirmedBy: String(body.confirmedBy || body.updatedBy || '').trim(), updatedAt: dateUtil.nowIso() };
-  const ledgers = [];
-  await withMongoTransaction(async (session) => {
-    ledgers.push(await postFundLedger({ date: updated.date, fundType: updated.fromFund, direction: 'out', amount, sourceType: 'FUND_TRANSFER', sourceId: updated.id, sourceCode: updated.code, referenceType: 'FUND_TRANSFER', referenceId: updated.id, referenceCode: updated.code, note: updated.note || `Chuyển quỹ ${updated.fromFund} sang ${updated.toFund}` }, { session }));
-    ledgers.push(await postFundLedger({ date: updated.date, fundType: updated.toFund, direction: 'in', amount, sourceType: 'FUND_TRANSFER', sourceId: updated.id, sourceCode: updated.code, referenceType: 'FUND_TRANSFER', referenceId: updated.id, referenceCode: updated.code, note: updated.note || `Nhận chuyển quỹ từ ${updated.fromFund}` }, { session }));
-    await fundTransferRepository.upsert(updated, { session });
-  });
-  return { transfer: updated, ledgers: ledgers.filter(Boolean), message: 'Đã xác nhận chuyển quỹ và ghi fundLedgers' };
-}
-
-module.exports = {
-  listFundLedgers,
-  summarizeFundLedgers,
-  buildDeliverySubmissionDraft,
-  createDeliveryCashSubmission,
-  listDeliveryCashSubmissions,
-  listExpenseVouchers,
-  listFundTransfers,
-  confirmDeliveryCashSubmission,
-  classifyConfirmedDeliveryShortages,
-  getDeliveryCashShortageHistory,
-  createDeliveryShortageRepayment,
-  confirmDeliveryShortageRepayment,
-  updateDeliveryCashSubmission,
-  createExpenseVoucher,
-  updateExpenseVoucher,
-  confirmExpenseVoucher,
-  createFundTransfer,
-  updateFundTransfer,
-  confirmFundTransfer,
-  postFundLedger,
-  buildFundLedgerIdempotencyKey
-};
+/* GENERATED FILE — edit src/services/fundService.source/part-01.jsfrag, src/services/fundService.source/part-02.jsfrag, src/services/fundService.source/part-03.jsfrag and run npm run build:source-bundles. */
+"use strict"
+;const e=require("../utils/date.util"),{makeId:t,normalizeText:r,toNumber:n}=require("../utils/common.util"),{withMongoTransaction:o}=require("../utils/transaction.util"),i=require("../repositories/fundLedgerRepository"),a=require("../repositories/deliveryCashSubmissionRepository"),s=require("../repositories/expenseVoucherRepository"),d=require("../repositories/fundTransferRepository"),u=require("../repositories/deliveryCashShortageRepository"),c=require("../repositories/deliveryShortageRepaymentRepository"),m=require("./auditService")
+;function f(){return require("./master-order/masterOrderDelivery.service")}const{pickDeliveryStaffCode:l}=require("../domain/staff/staffIdentity");function p(t){
+return e.toDateOnly(t||e.todayVN())}function h(e){return Math.max(0,Math.round(n(e)))}function y(e={}){
+return!["void","cancelled","canceled","deleted"].includes(String(e.status||"").toLowerCase())}function g(e){return"bank"===String(e||"cash").toLowerCase()?"bank":"cash"}
+function S(e){return"out"===String(e||"in").toLowerCase()?"out":"in"}function C(e,t){return(String(e||"").trim()||String(t||"cash")).toUpperCase()}function A(e){
+return String(e||"").trim().toUpperCase()}function v(e={}){
+const t=g(e.fundType),r=S(e.direction),n=C(e.account,t),o=String(e.sourceType||"MANUAL_FUND").trim()||"MANUAL_FUND",i=String(e.sourceId||e.sourceCode||e.referenceId||e.referenceCode||e.refId||e.refCode||e.id||e.code||"").trim()
+;return i?[o,i,t,r,n].map(A).join("|"):""}function b(e,t=[]){const r=t.reduce((e,t)=>{const r=String(t.code||"").match(/(\d+)$/);return Math.max(e,r?Number(r[1]):0)},0)
+;return`${e}${String(r+1).padStart(5,"0")}`}async function w(){return b("FL",await i.findAll({code:{$regex:"^FL\\d+$"}},{projection:"code",sort:{code:-1},limit:1}))}
+async function T(){return b("PC",await s.findAll())}async function I(){return b("CQ",await d.findAll())}function N(e,t){
+return`NQGH-${String(p(e)).replace(/-/g,"")}-${String(t||"NO_NVGH").trim().replace(/[^a-zA-Z0-9_-]/g,"").slice(0,24)||"NO_NVGH"}`}function B(e,t){const r="bank"===g(t)?"TK":"TM"
+;return`DCSH-${String(e||"").trim()}-${r}`}function k(e={},t){
+return`NQBU-${String(p(t)).replace(/-/g,"")}-${String(e.deliveryStaffCode||"NVGH").replace(/[^a-zA-Z0-9_-]/g,"").slice(0,20)||"NVGH"}-${String(Date.now()).slice(-7)+String(Math.floor(100*Math.random())).padStart(2,"0")}`
+}const D={cash:{collected_not_remitted:{responsibleType:"delivery_staff",status:"open"},customer_not_paid:{responsibleType:"customer",status:"customer_outstanding"},
+approved_expense:{responsibleType:"adjustment",status:"adjusted",requireNote:!0},pending_review:{responsibleType:"pending",status:"disputed",requireNote:!0}},bank:{
+pending_bank_reconciliation:{responsibleType:"pending",status:"pending_reconciliation"},delivery_staff_liability:{responsibleType:"delivery_staff",status:"open"},
+customer_not_paid:{responsibleType:"customer",status:"customer_outstanding"},approved_adjustment:{responsibleType:"adjustment",status:"adjusted",requireNote:!0}}};function R(e){
+return Math.max(0,-Math.round(n(e)))}function E(e={},t){
+return(e.shortageResolution&&"object"==typeof e.shortageResolution?e.shortageResolution[t]:null)||e[`${t}ShortageResolution`]||null}function _(e={},t,r){if(r<=0)return null
+;const n=E(e,t),o="string"==typeof n?{reasonType:n}:n||{},i=String(o.reasonType||o.reason||"").trim(),a=D[t]?.[i];if(!a)return{
+error:"bank"===t?"Cần chọn cách xử lý khoản thiếu chuyển khoản trước khi xác nhận":"Cần chọn cách xử lý khoản thiếu tiền mặt trước khi xác nhận",fundType:t,shortageAmount:r}
+;const s=String(o.note||e.shortageNote||"").trim();if(a.requireNote&&!s)return{error:"Cần nhập ghi chú giải trình cho cách xử lý khoản thiếu đã chọn",fundType:t,shortageAmount:r}
+;const d="adjustment"===a.responsibleType?r:0;return{fundType:t,reasonType:i,responsibleType:a.responsibleType,status:a.status,originalShortageAmount:r,settledAmount:0,
+adjustedAmount:d,outstandingAmount:Math.max(0,r-d),note:s}}function q(e={},t={}){const r={
+cash:R(t.differenceCashAmount??e.differenceCashAmount??h(t.submittedCashAmount??e.submittedCashAmount)-h(e.reportCashAmount)),
+bank:R(t.differenceBankAmount??e.differenceBankAmount??h(t.submittedBankAmount??e.submittedBankAmount)-h(e.reportBankAmount))},n=[],o=[];for(const e of["cash","bank"]){
+if(r[e]<=0)continue;const i=_(t,e,r[e]);i?.error?o.push(i):n.push(i)}return o.length?{error:o.map(e=>e.error).join(". "),status:422,requiresShortageResolution:!0,shortages:o}:{
+plans:n,amounts:r}}function $(t={},r={},n=""){const o=e.nowIso();return{id:B(t.code,r.fundType),code:B(t.code,r.fundType),sourceSubmissionId:String(t.id||"").trim(),
+sourceSubmissionCode:String(t.code||"").trim(),deliveryDate:String(t.deliveryDate||"").trim(),deliveryStaffCode:String(t.deliveryStaffCode||"").trim(),
+deliveryStaffName:String(t.deliveryStaffName||"").trim(),fundType:g(r.fundType),reasonType:String(r.reasonType||"").trim(),responsibleType:String(r.responsibleType||"").trim(),
+originalShortageAmount:h(r.originalShortageAmount),settledAmount:h(r.settledAmount),adjustedAmount:h(r.adjustedAmount),pendingRepaymentAmount:0,
+outstandingAmount:h(r.outstandingAmount),status:String(r.status||"open").trim(),note:String(r.note||"").trim(),classifiedBy:String(n||"").trim(),classifiedAt:o,
+createdBy:String(n||"").trim(),createdAt:o,updatedAt:o}}async function F(e,t=[],r="",n={}){const o=[];for(const i of t){
+const t=await u.findBySourceAndFundType(e.id,e.code,i.fundType,n);if(t){o.push(t);continue}const a=$(e,i,r);await u.upsert(a,n),o.push(a)}return o}function L(e,t){
+return String(e||t||"").trim()}function O(e,t){
+return!t||[e.code,e.sourceCode,e.sourceType,e.deliveryStaffCode,e.deliveryStaffName,e.customerCode,e.customerName,e.staffName,e.note,e.status].some(e=>r(e).includes(t))}
+function P(e=[]){
+const t=e.filter(y),r=t.filter(e=>"cash"===e.fundType&&"in"===e.direction).reduce((e,t)=>e+n(t.amount),0),o=t.filter(e=>"cash"===e.fundType&&"out"===e.direction).reduce((e,t)=>e+n(t.amount),0),i=t.filter(e=>"bank"===e.fundType&&"in"===e.direction).reduce((e,t)=>e+n(t.amount),0),a=t.filter(e=>"bank"===e.fundType&&"out"===e.direction).reduce((e,t)=>e+n(t.amount),0)
+;return{cashIn:r,cashOut:o,cashBalance:r-o,bankIn:i,bankOut:a,bankBalance:i-a,totalIn:r+i,totalOut:o+a,totalBalance:r+i-o-a}}async function x(e={}){const t={status:{
+$nin:["void","cancelled","canceled","deleted"]}};e.fundType&&"all"!==e.fundType&&(t.fundType=String(e.fundType)),e.direction&&"all"!==e.direction&&(t.direction=String(e.direction))
+;const r=e.dateFrom?p(e.dateFrom):"",o=e.dateTo?p(e.dateTo):"";(r||o)&&(t.date={...r?{$gte:r}:{},...o?{$lte:o}:{}});const a=String(e.q||e.search||"").trim();if(a){
+const e=a.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),r=new RegExp(e,"i")
+;t.$or=["code","sourceCode","sourceType","deliveryStaffCode","deliveryStaffName","customerCode","customerName","staffName","note","status"].map(e=>({[e]:r}))}
+const s=Math.max(Number(e.page||1),1),d=Math.min(Math.max(Number(e.limit||50),1),200),u=(s-1)*d,c=(await i.aggregate([{$match:t},{$facet:{rows:[{$sort:{date:-1,createdAt:-1,code:-1
+}},{$skip:u},{$limit:d}],totals:[{$group:{_id:{fundType:"$fundType",direction:"$direction"},amount:{$sum:{$ifNull:["$amount",0]}},count:{$sum:1}}}],count:[{$count:"total"}]}
+}]))[0]||{rows:[],totals:[],count:[]},m=(c.totals||[]).map(e=>({fundType:e._id?.fundType,direction:e._id?.direction,amount:n(e.amount),count:n(e.count)})),f=P(m.map(e=>({
+fundType:e.fundType,direction:e.direction,amount:e.amount,status:"posted"}))),l=n(c.count?.[0]?.total);return{fundLedgers:c.rows||[],items:c.rows||[],summary:{...f,groups:m},meta:{
+page:s,limit:d,total:l,totalPages:Math.ceil(l/d),hasMore:u+(c.rows||[]).length<l}}}async function M(e,t,r,n,o="",a=""){const s=v({sourceType:e,sourceCode:t,sourceId:o,fundType:r,
+direction:n,account:a});if(s){const e=await i.findByIdempotencyKey(s);if(e)return e}const d={fundType:r,direction:n,$or:[{sourceType:e,sourceCode:t},{referenceType:e,
+referenceCode:t}]};return a&&(d.account=a),o&&d.$or.push({sourceType:e,sourceId:o},{referenceType:e,referenceId:o}),(await i.findAll(d,{limit:1}))[0]||null}
+async function H(r={},n={}){const o=h(r.amount);if(o<=0)return null
+;const a=g(r.fundType),s=S(r.direction),d=C(r.account,a),u=String(r.sourceType||"MANUAL_FUND").trim(),c=String(r.sourceId||r.refId||r.referenceId||"").trim(),m=String(r.sourceCode||r.refCode||r.referenceCode||"").trim(),f=String(r.idempotencyKey||v({
+...r,sourceType:u,sourceId:c,sourceCode:m,fundType:a,direction:s,account:d})).trim();if(!f)throw new Error("Thiếu sourceId/sourceCode để tạo idempotencyKey cho fund ledger")
+;const l=await i.findByIdempotencyKey(f,n);if(l)return{ok:!0,skipped:!0,ledger:l,reason:"DUPLICATE_FUND_LEDGER"};const y={id:String(r.id||t("FL")).trim(),
+code:String(r.code||await w()).trim(),date:p(r.date),fundType:a,direction:s,account:d,idempotencyKey:f,amount:o,sourceType:u,sourceId:c,sourceCode:m,
+refType:String(r.refType||u).trim(),refId:String(r.refId||c).trim(),refCode:String(r.refCode||m).trim(),referenceType:String(r.referenceType||r.refType||u).trim(),
+referenceId:String(r.referenceId||r.refId||c).trim(),referenceCode:String(r.referenceCode||r.refCode||m).trim(),deliveryDate:String(r.deliveryDate||"").trim(),
+deliveryStaffCode:String(r.deliveryStaffCode||"").trim(),deliveryStaffName:String(r.deliveryStaffName||"").trim(),salesStaffCode:String(r.salesStaffCode||"").trim(),
+salesStaffName:String(r.salesStaffName||"").trim(),customerCode:String(r.customerCode||"").trim(),customerName:String(r.customerName||"").trim(),
+staffCode:String(r.staffCode||"").trim(),staffName:String(r.staffName||"").trim(),staffRole:String(r.staffRole||"").trim(),collectorType:String(r.collectorType||"").trim(),
+collectorCode:String(r.collectorCode||"").trim(),collectorName:String(r.collectorName||"").trim(),receiverCode:String(r.receiverCode||"").trim(),
+receiverName:String(r.receiverName||"").trim(),receiverRole:String(r.receiverRole||"").trim(),supplierCode:String(r.supplierCode||"").trim(),
+supplierName:String(r.supplierName||"").trim(),payerCode:String(r.payerCode||"").trim(),payerName:String(r.payerName||"").trim(),payerRole:String(r.payerRole||"").trim(),
+depositorCode:String(r.depositorCode||"").trim(),depositorName:String(r.depositorName||"").trim(),depositorRole:String(r.depositorRole||"").trim(),
+counterpartyCode:String(r.counterpartyCode||"").trim(),counterpartyName:String(r.counterpartyName||"").trim(),counterpartyRole:String(r.counterpartyRole||"").trim(),
+isReversal:!0===r.isReversal,reversalOf:String(r.reversalOf||"").trim(),originalSourceId:String(r.originalSourceId||"").trim(),note:String(r.note||"").trim(),
+status:String(r.status||"posted").trim(),createdBy:String(r.createdBy||"").trim(),createdAt:r.createdAt||e.nowIso(),updatedAt:e.nowIso()};try{return await i.upsert(y,n),y}catch(e){
+if(e&&(11e3===e.code||String(e.message||"").includes("duplicate key"))){const e=await i.findByIdempotencyKey(f,n);if(e)return{ok:!0,skipped:!0,ledger:e,
+reason:"DUPLICATE_FUND_LEDGER"}}throw e}}function V(e,t=[]){for(const r of t){const t=n(e[r]);if(t>0)return t}return 0}async function U(n={}){
+const o=p(n.deliveryDate||n.date),i=String(l(n)||n.delivery||"").trim();if(!i)return{error:"Thiếu nhân viên giao hàng để tạo phiếu nộp quỹ",status:400}
+;const a=f(),s="function"==typeof a.listDeliveryTodayOrdersCompact?a.listDeliveryTodayOrdersCompact:a.listDeliveryToday,d=await s({date:o,delivery:i,deliveryStaffCode:i,page:1,
+limit:5e3}),u=r(i),c=(d.orders||d.rows||[]).filter(e=>r(l(e)||e.deliveryStaffCode)===u);if(!c.length)return{error:"Không có đơn giao để tạo phiếu nộp quỹ",status:404}
+;const m=c.find(e=>e.deliveryStaffName)?.deliveryStaffName||i,y=c.reduce((e,t)=>e+V(t,["cashAmount","cashCollected"]),0),g=c.reduce((e,t)=>e+V(t,["bankAmount","bankCollected","transferAmount"]),0),S=c.reduce((e,t)=>e+V(t,["oldDebtCashCollected","debtCashCollected","arCashCollected"]),0),C=c.reduce((e,t)=>e+V(t,["oldDebtBankCollected","debtBankCollected","arBankCollected"]),0),A=y+S,v=g+C,b=N(o,i),w=h(n.submittedCashAmount??A),T=h(n.submittedBankAmount??v)
+;return{draft:{id:String(n.id||t("NQGH")).trim(),code:b,deliveryDate:o,deliveryStaffCode:i,deliveryStaffName:m,reportCashAmount:A,reportBankAmount:v,reportCurrentOrderCashAmount:y,
+reportCurrentOrderBankAmount:g,reportOldDebtCashAmount:S,reportOldDebtBankAmount:C,submittedCashAmount:w,submittedBankAmount:T,differenceCashAmount:w-A,differenceBankAmount:T-v,
+orderCodes:c.map(e=>e.orderCode||e.code||"").filter(Boolean),orderIds:c.map(e=>e.id||"").filter(Boolean),status:String(n.status||"pending").trim(),
+matchStatus:w===A&&T===v?"matched":"mismatch",fundPosted:!1,note:String(n.note||"").trim(),createdBy:String(n.createdBy||"").trim(),createdAt:e.nowIso(),updatedAt:e.nowIso()},
+orders:c,deliverySummary:d.summary||d.kpi||{}}}async function j(e={}){const t=await U(e);if(t.error)return t;const r=t.draft,n=await a.findByIdOrCode(r.code)
+;return n&&!["cancelled","canceled","void","deleted"].includes(String(n.status||"").toLowerCase())?{error:`Đã có phiếu nộp quỹ ${n.code} cho ngày/NVGH này`,status:409,submission:n
+}:(await a.upsert(r),{submission:r,orders:t.orders})}async function G(e={}){const t={};(e.deliveryDate||e.date)&&(t.deliveryDate=p(e.deliveryDate||e.date)),
+(l(e)||e.delivery)&&(t.deliveryStaffCode=String(l(e)||e.delivery).trim());let n=await a.findAll(t,{sort:{deliveryDate:-1,createdAt:-1,code:-1},limit:e.limit||500})
+;const o=r(e.q||e.search||"");if(o&&(n=n.filter(e=>O(e,o))),!n.length)return{submissions:[]}
+;const i=n.map(e=>String(e.id||"").trim()).filter(Boolean),s=n.map(e=>String(e.code||"").trim()).filter(Boolean),d=[];i.length&&d.push({sourceSubmissionId:{$in:i}}),
+s.length&&d.push({sourceSubmissionCode:{$in:s}});const c=d.length?await u.findAll({$or:d},{limit:Math.min(1e3,3*n.length)}):[],m=new Map;for(const e of c){
+const t=[L(e.sourceSubmissionId,""),L("",e.sourceSubmissionCode)].filter(Boolean);for(const r of t)m.has(r)||m.set(r,{}),m.get(r)[g(e.fundType)]=e}return n=n.map(e=>{
+const t=m.get(L(e.id,""))||m.get(L("",e.code))||{};return{...e,cashShortage:t.cash||null,bankShortage:t.bank||null}}),{submissions:n}}function K(e={}){
+return["confirmed","matched","posted"].includes(String(e.status||"").toLowerCase())||!0===e.fundPosted}function Y(e){return{error:`${e} đã xác nhận, không được sửa nghiệp vụ`,
+status:409}}function Q(e={},t={}){const r=String(e.id||"").trim(),n=String(t.id||"").trim();if(r&&n)return r===n;const o=String(e.code||"").trim(),i=String(t.code||"").trim()
+;return Boolean(o&&i&&o===i)}async function z(t,r={}){const n=await a.findByIdOrCode(t);if(!n)return{error:"Không tìm thấy phiếu nộp quỹ",status:404}
+;if(K(n))return Y("Phiếu nộp quỹ")
+;const o=h(r.submittedCashAmount??n.submittedCashAmount??n.reportCashAmount),i=h(r.submittedBankAmount??n.submittedBankAmount??n.reportBankAmount),s=r.deliveryDate??r.date??n.deliveryDate,d=String(l(r)||r.delivery||n.deliveryStaffCode||"").trim(),u=await U({
+...n,...r,id:n.id,deliveryDate:s,deliveryStaffCode:d,submittedCashAmount:o,submittedBankAmount:i,status:"pending",note:String(r.note??n.note??"").trim(),
+createdBy:n.createdBy||r.createdBy||""});if(u.error)return u;const c=u.draft;if(String(c.code||"")!==String(n.code||"")){const e=await a.findByIdOrCode(c.code)
+;if(e&&!Q(n,e))return{error:`Đã có phiếu nộp quỹ ${c.code} cho ngày/NVGH này`,status:409,submission:e}}const m={...n,...c,id:n.id||c.id,createdBy:n.createdBy||c.createdBy||"",
+createdAt:n.createdAt||c.createdAt,status:"pending",fundPosted:!1,postedAt:"",confirmedAt:"",confirmedBy:"",updatedAt:e.nowIso()},f=await a.patchByIdOrCode(t,m);return f?{
+submission:f,orders:u.orders,message:"Đã cập nhật phiếu nộp quỹ và đồng bộ lại số báo cáo theo ngày/NVGH"}:{error:"Phiếu nộp quỹ đã thay đổi hoặc không còn tồn tại",status:409}}
+async function X(e={}){const t={};if(e.dateFrom||e.dateTo){const r=e.dateFrom?p(e.dateFrom):"",n=e.dateTo?p(e.dateTo):"";t.date={...r?{$gte:r}:{},...n?{$lte:n}:{}}}
+e.fundType&&"all"!==e.fundType&&(t.fundType=String(e.fundType));let n=await s.findAll(t,{sort:{date:-1,createdAt:-1,code:-1},limit:e.limit||500});const o=r(e.q||e.search||"")
+;return o&&(n=n.filter(e=>[e.code,e.expenseType,e.receiverCode,e.receiverName,e.receiverRole,e.note,e.status].some(e=>r(e).includes(o)))),{vouchers:n}}async function Z(e={}){
+const t={};if(e.dateFrom||e.dateTo){const r=e.dateFrom?p(e.dateFrom):"",n=e.dateTo?p(e.dateTo):"";t.date={...r?{$gte:r}:{},...n?{$lte:n}:{}}}let n=await d.findAll(t,{sort:{date:-1,
+createdAt:-1,code:-1},limit:e.limit||500});const o=r(e.q||e.search||"")
+;return o&&(n=n.filter(e=>[e.code,e.fromFund,e.toFund,e.bankName,e.note,e.status].some(e=>r(e).includes(o)))),{transfers:n}}async function J(t,r={}){
+const n=await a.findByIdOrCode(t);if(!n)return{error:"Không tìm thấy phiếu nộp quỹ",status:404}
+;if(["cancelled","canceled","void","deleted"].includes(String(n.status||"").toLowerCase()))return{error:"Phiếu nộp quỹ đã hủy",status:400}
+;if(n.fundPosted||"confirmed"===String(n.status||"").toLowerCase())return{submission:n,ledgers:[],message:"Phiếu đã ghi sổ quỹ trước đó"}
+;const i=h(r.submittedCashAmount??n.submittedCashAmount??n.reportCashAmount),s=h(r.submittedBankAmount??n.submittedBankAmount??n.reportBankAmount),d=i-h(n.reportCashAmount),u=s-h(n.reportBankAmount),c=String(r.confirmedBy||r.updatedBy||r.actorCode||"").trim(),f=q({
+...n,submittedCashAmount:i,submittedBankAmount:s,differenceCashAmount:d,differenceBankAmount:u},{...r,submittedCashAmount:i,submittedBankAmount:s,differenceCashAmount:d,
+differenceBankAmount:u});if(f.error)return f;const l={...n,submittedCashAmount:i,submittedBankAmount:s,differenceCashAmount:d,differenceBankAmount:u,
+matchStatus:0===d&&0===u?"matched":"mismatch",status:"confirmed",fundPosted:!0,postedAt:e.nowIso(),confirmedAt:e.nowIso(),confirmedBy:c,
+shortageClassifiedAt:f.plans.length?e.nowIso():"",shortageClassifiedBy:f.plans.length?c:"",note:String(r.note??n.note??"").trim(),updatedAt:e.nowIso()},p=[];let y=[]
+;return await o(async e=>{await a.upsert(l,{session:e}),i>0&&p.push(await H({date:l.deliveryDate,fundType:"cash",direction:"in",amount:i,sourceType:"DELIVERY_CASH_SUBMISSION",
+sourceId:l.id,sourceCode:l.code,deliveryDate:l.deliveryDate,deliveryStaffCode:l.deliveryStaffCode,deliveryStaffName:l.deliveryStaffName,createdBy:c,
+note:`NVGH ${l.deliveryStaffName||l.deliveryStaffCode} nộp tiền mặt giao hàng ngày ${l.deliveryDate}`},{session:e})),s>0&&p.push(await H({date:l.deliveryDate,fundType:"bank",
+direction:"in",amount:s,sourceType:"DELIVERY_CASH_SUBMISSION",sourceId:l.id,sourceCode:l.code,deliveryDate:l.deliveryDate,deliveryStaffCode:l.deliveryStaffCode,
+deliveryStaffName:l.deliveryStaffName,createdBy:c,note:`NVGH ${l.deliveryStaffName||l.deliveryStaffCode} đối soát chuyển khoản giao hàng ngày ${l.deliveryDate}`},{session:e})),
+y=await F(l,f.plans,c,{session:e})}),await m.log("DELIVERY_CASH_SUBMISSION_CONFIRMED",{refType:"DELIVERY_CASH_SUBMISSION",refId:l.id,refCode:l.code,user:c,summary:{
+submittedCashAmount:i,submittedBankAmount:s,differenceCashAmount:d,differenceBankAmount:u,shortageCodes:y.map(e=>e.code)},note:`Xác nhận phiếu nộp quỹ ${l.code}`}),{submission:l,
+ledgers:p.filter(Boolean),shortages:y,message:"Đã xác nhận phiếu nộp quỹ, ghi fundLedgers và quản lý khoản thiếu"}}async function W(t,r={}){const n=await a.findByIdOrCode(t)
+;if(!n)return{error:"Không tìm thấy phiếu nộp quỹ",status:404};if(!n.fundPosted&&"confirmed"!==String(n.status||"").toLowerCase())return{
+error:"Chỉ phân loại bổ sung cho phiếu đã xác nhận",status:409};const i=q(n,r);if(i.error)return i;if(!i.plans.length)return{error:"Phiếu không có khoản thiếu cần phân loại",
+status:400};const s=String(r.classifiedBy||r.updatedBy||r.actorCode||"").trim();let d=[];const u={...n,shortageClassifiedAt:e.nowIso(),shortageClassifiedBy:s,updatedAt:e.nowIso()}
+;return await o(async e=>{d=await F(u,i.plans,s,{session:e}),await a.patchByIdOrCode(t,{shortageClassifiedAt:u.shortageClassifiedAt,shortageClassifiedBy:u.shortageClassifiedBy,
+updatedAt:u.updatedAt},{session:e})}),await m.log("DELIVERY_CASH_SHORTAGE_CLASSIFIED",{refType:"DELIVERY_CASH_SUBMISSION",refId:n.id,refCode:n.code,user:s,summary:{
+shortageCodes:d.map(e=>e.code)},note:`Phân loại khoản thiếu cho phiếu ${n.code}`}),{submission:u,shortages:d,message:"Đã lưu phân loại khoản thiếu của phiếu đã xác nhận"}}
+async function ee(e){const t=await u.findByIdOrCode(e);if(!t)return{error:"Không tìm thấy khoản thiếu quỹ",status:404};const r=await c.findAll({$or:[{shortageId:t.id},{
+shortageCode:t.code}]},{sort:{createdAt:-1,code:-1},limit:500}),n=r.filter(e=>"pending"===String(e.status||"").toLowerCase()).reduce((e,t)=>e+h(t.amount),0);return{shortage:t,
+repayments:r,summary:{originalShortageAmount:h(t.originalShortageAmount),settledAmount:h(t.settledAmount),adjustedAmount:h(t.adjustedAmount),
+outstandingAmount:h(t.outstandingAmount),pendingAmount:n,availableToRepay:Math.max(0,h(t.outstandingAmount)-n)}}}async function te(r,n={}){const i=h(n.amount);if(i<=0)return{
+error:"Số tiền nộp bù phải lớn hơn 0",status:400};const a=String(n.createdBy||n.actorCode||"").trim();let s=null,d=null;return await o(async o=>{if(d=await u.findByIdOrCode(r,{
+session:o}),!d)throw Object.assign(new Error("Không tìm thấy khoản thiếu quỹ"),{status:404})
+;if("delivery_staff"!==String(d.responsibleType||""))throw Object.assign(new Error("Khoản thiếu này không được ghi nhận là công nợ của NVGH"),{status:409})
+;if(!["open","partial"].includes(String(d.status||"").toLowerCase())||h(d.outstandingAmount)<=0)throw Object.assign(new Error("Khoản thiếu đã tất toán hoặc không còn được phép nộp bù"),{
+status:409});const m=await u.reservePendingRepayment(d.id||d.code,i,e.nowIso(),{session:o});if(!m){const e=(await c.findAll({$or:[{shortageId:d.id},{shortageCode:d.code}],
+status:"pending"},{session:o,limit:500})).reduce((e,t)=>e+h(t.amount),0),t=Math.max(0,h(d.outstandingAmount)-e)
+;throw Object.assign(new Error(`Số tiền nộp bù vượt số còn có thể lập phiếu (${t})`),{status:409})}d=m;const f=e.nowIso();s={id:t("DSR"),code:k(d,n.repaymentDate||n.date),
+shortageId:d.id,shortageCode:d.code,sourceSubmissionId:d.sourceSubmissionId,sourceSubmissionCode:d.sourceSubmissionCode,deliveryDate:d.deliveryDate,
+deliveryStaffCode:d.deliveryStaffCode,deliveryStaffName:d.deliveryStaffName,repaymentDate:p(n.repaymentDate||n.date),fundType:g(n.fundType||n.paymentMethod),amount:i,
+status:"pending",fundPosted:!1,note:String(n.note||"").trim(),createdBy:a,createdAt:f,updatedAt:f},await c.upsert(s,{session:o})}),
+await m.log("DELIVERY_SHORTAGE_REPAYMENT_CREATED",{refType:"DELIVERY_CASH_SHORTAGE",refId:d.id,refCode:d.code,user:a,summary:s,note:`Tạo phiếu nộp bù ${s.code}`}),{shortage:d,
+repayment:s,message:"Đã tạo phiếu nộp bù, chờ kế toán xác nhận ghi quỹ"}}async function re(t,r={}){let n=await c.findByIdOrCode(t);if(!n)return{error:"Không tìm thấy phiếu nộp bù",
+status:404};if(n.fundPosted||"confirmed"===String(n.status||"").toLowerCase()){const e=await u.findByIdOrCode(n.shortageId||n.shortageCode);return{repayment:n,shortage:e,
+ledger:null,message:"Phiếu nộp bù đã ghi quỹ trước đó"}}if("pending"!==String(n.status||"").toLowerCase())return{error:"Phiếu nộp bù không ở trạng thái chờ xác nhận",status:409}
+;const i=h(n.amount);if(i<=0)return{error:"Số tiền nộp bù không hợp lệ",status:400};const a=String(r.confirmedBy||r.updatedBy||r.actorCode||"").trim();let s=null,d=null
+;return await o(async r=>{const o=await c.findByIdOrCode(t,{session:r})
+;if(!o||o.fundPosted||"pending"!==String(o.status||""))throw Object.assign(new Error("Phiếu nộp bù đã được xử lý bởi phiên khác"),{status:409})
+;if(s=await u.applyConfirmedRepayment(o.shortageId||o.shortageCode,i,e.nowIso(),{session:r}),
+!s)throw Object.assign(new Error("Số tiền nộp bù vượt khoản còn thiếu hoặc khoản thiếu đã khóa"),{status:409});const m=e.nowIso();if(n=await c.markConfirmedIfPending(t,{
+status:"confirmed",fundPosted:!0,postedAt:m,confirmedAt:m,confirmedBy:a,updatedAt:m},{session:r}),!n)throw Object.assign(new Error("Phiếu nộp bù đã được xác nhận trước đó"),{
+status:409});d=await H({date:n.repaymentDate,fundType:n.fundType,direction:"in",amount:i,sourceType:"DELIVERY_SHORTAGE_REPAYMENT",sourceId:n.id,sourceCode:n.code,
+deliveryDate:n.deliveryDate,deliveryStaffCode:n.deliveryStaffCode,deliveryStaffName:n.deliveryStaffName,createdBy:a,
+note:n.note||`NVGH ${n.deliveryStaffName||n.deliveryStaffCode} nộp bù thiếu quỹ ${n.shortageCode}`},{session:r})}),await m.log("DELIVERY_SHORTAGE_REPAYMENT_CONFIRMED",{
+refType:"DELIVERY_CASH_SHORTAGE",refId:s.id,refCode:s.code,user:a,summary:{repaymentCode:n.code,amount:i,outstandingAmount:s.outstandingAmount},
+note:`Xác nhận phiếu nộp bù ${n.code}`}),{repayment:n,shortage:s,ledger:d,message:"Đã xác nhận nộp bù, tăng quỹ và giảm công nợ thiếu quỹ NVGH"}}async function ne(r={}){
+const n=h(r.amount);if(n<=0)return{error:"Số tiền chi phải lớn hơn 0",status:400};const o={id:String(r.id||t("PC")).trim(),code:String(r.code||await T()).trim(),date:p(r.date),
+fundType:"bank"===String(r.fundType||"cash").toLowerCase()?"bank":"cash",amount:n,expenseType:String(r.expenseType||"other").trim(),receiverCode:String(r.receiverCode||"").trim(),
+receiverName:String(r.receiverName||"").trim(),receiverRole:String(r.receiverRole||"").trim(),note:String(r.note||"").trim(),status:"pending",fundPosted:!1,
+createdBy:String(r.createdBy||"").trim(),createdAt:e.nowIso(),updatedAt:e.nowIso()};return await s.upsert(o),{voucher:o,message:"Đã tạo phiếu chi, chờ xác nhận ghi sổ quỹ"}}
+async function oe(t,r={}){const n=await s.findByIdOrCode(t);if(!n)return{error:"Không tìm thấy phiếu chi",status:404};if(K(n))return Y("Phiếu chi");const o=h(r.amount??n.amount)
+;if(o<=0)return{error:"Số tiền chi phải lớn hơn 0",status:400};const i={...n,date:p(r.date||n.date),
+fundType:"bank"===String(r.fundType||n.fundType||"cash").toLowerCase()?"bank":"cash",amount:o,expenseType:String(r.expenseType??n.expenseType??"other").trim(),
+receiverCode:String(r.receiverCode??n.receiverCode??"").trim(),receiverName:String(r.receiverName??n.receiverName??"").trim(),
+receiverRole:String(r.receiverRole??n.receiverRole??"").trim(),note:String(r.note??n.note??"").trim(),status:"pending",updatedAt:e.nowIso()};return await s.upsert(i),{voucher:i,
+message:"Đã cập nhật phiếu chi"}}async function ie(t,r={}){const n=await s.findByIdOrCode(t);if(!n)return{error:"Không tìm thấy phiếu chi",status:404}
+;if(["cancelled","canceled","void","deleted"].includes(String(n.status||"").toLowerCase()))return{error:"Phiếu chi đã hủy",status:400}
+;if(n.fundPosted||"confirmed"===String(n.status||"").toLowerCase())return{voucher:n,ledger:null,message:"Phiếu chi đã ghi sổ quỹ trước đó"};const i=h(n.amount);if(i<=0)return{
+error:"Số tiền chi phải lớn hơn 0",status:400};const a={...n,status:"confirmed",fundPosted:!0,postedAt:e.nowIso(),confirmedAt:e.nowIso(),
+confirmedBy:String(r.confirmedBy||r.updatedBy||"").trim(),updatedAt:e.nowIso()};let d=null;return await o(async e=>{d=await H({date:a.date,fundType:a.fundType,direction:"out",
+amount:i,sourceType:"EXPENSE_VOUCHER",sourceId:a.id,sourceCode:a.code,referenceType:"EXPENSE_VOUCHER",referenceId:a.id,referenceCode:a.code,receiverCode:a.receiverCode,
+receiverName:a.receiverName,receiverRole:a.receiverRole,note:a.note||`Phiếu chi ${a.code}`},{session:e}),await s.upsert(a,{session:e})}),{voucher:a,ledger:d,
+message:"Đã xác nhận phiếu chi và ghi fundLedgers"}}async function ae(r={}){const n=h(r.amount);if(n<=0)return{error:"Số tiền chuyển quỹ phải lớn hơn 0",status:400}
+;const o="bank"===String(r.fromFund||"cash").toLowerCase()?"bank":"cash",i="cash"===String(r.toFund||"bank").toLowerCase()?"cash":"bank";if(o===i)return{
+error:"Quỹ nguồn và quỹ đích không được trùng nhau",status:400};const a={id:String(r.id||t("CQ")).trim(),code:String(r.code||await I()).trim(),date:p(r.date),fromFund:o,toFund:i,
+amount:n,bankName:String(r.bankName||"").trim(),accountNumber:String(r.accountNumber||"").trim(),note:String(r.note||"").trim(),status:"pending",fundPosted:!1,
+createdBy:String(r.createdBy||"").trim(),createdAt:e.nowIso(),updatedAt:e.nowIso()};return await d.upsert(a),{transfer:a,message:"Đã tạo phiếu chuyển quỹ, chờ xác nhận ghi sổ quỹ"}
+}async function se(t,r={}){const n=await d.findByIdOrCode(t);if(!n)return{error:"Không tìm thấy phiếu chuyển quỹ",status:404};if(K(n))return Y("Phiếu chuyển quỹ")
+;const o=h(r.amount??n.amount);if(o<=0)return{error:"Số tiền chuyển quỹ phải lớn hơn 0",status:400}
+;const i="bank"===String(r.fromFund||n.fromFund||"cash").toLowerCase()?"bank":"cash",a="cash"===String(r.toFund||n.toFund||"bank").toLowerCase()?"cash":"bank";if(i===a)return{
+error:"Quỹ nguồn và quỹ đích không được trùng nhau",status:400};const s={...n,date:p(r.date||n.date),fromFund:i,toFund:a,amount:o,
+bankName:String(r.bankName??n.bankName??"").trim(),accountNumber:String(r.accountNumber??n.accountNumber??"").trim(),note:String(r.note??n.note??"").trim(),status:"pending",
+updatedAt:e.nowIso()};return await d.upsert(s),{transfer:s,message:"Đã cập nhật phiếu chuyển quỹ"}}async function de(t,r={}){const n=await d.findByIdOrCode(t);if(!n)return{
+error:"Không tìm thấy phiếu chuyển quỹ",status:404};if(["cancelled","canceled","void","deleted"].includes(String(n.status||"").toLowerCase()))return{
+error:"Phiếu chuyển quỹ đã hủy",status:400};if(n.fundPosted||"confirmed"===String(n.status||"").toLowerCase())return{transfer:n,ledgers:[],
+message:"Phiếu chuyển quỹ đã ghi sổ quỹ trước đó"};const i=h(n.amount);if(i<=0)return{error:"Số tiền chuyển quỹ phải lớn hơn 0",status:400};const a={...n,status:"confirmed",
+fundPosted:!0,postedAt:e.nowIso(),confirmedAt:e.nowIso(),confirmedBy:String(r.confirmedBy||r.updatedBy||"").trim(),updatedAt:e.nowIso()},s=[];return await o(async e=>{
+s.push(await H({date:a.date,fundType:a.fromFund,direction:"out",amount:i,sourceType:"FUND_TRANSFER",sourceId:a.id,sourceCode:a.code,referenceType:"FUND_TRANSFER",referenceId:a.id,
+referenceCode:a.code,note:a.note||`Chuyển quỹ ${a.fromFund} sang ${a.toFund}`},{session:e})),s.push(await H({date:a.date,fundType:a.toFund,direction:"in",amount:i,
+sourceType:"FUND_TRANSFER",sourceId:a.id,sourceCode:a.code,referenceType:"FUND_TRANSFER",referenceId:a.id,referenceCode:a.code,note:a.note||`Nhận chuyển quỹ từ ${a.fromFund}`},{
+session:e})),await d.upsert(a,{session:e})}),{transfer:a,ledgers:s.filter(Boolean),message:"Đã xác nhận chuyển quỹ và ghi fundLedgers"}}module.exports={listFundLedgers:x,
+summarizeFundLedgers:P,buildDeliverySubmissionDraft:U,createDeliveryCashSubmission:j,listDeliveryCashSubmissions:G,listExpenseVouchers:X,listFundTransfers:Z,
+confirmDeliveryCashSubmission:J,classifyConfirmedDeliveryShortages:W,getDeliveryCashShortageHistory:ee,createDeliveryShortageRepayment:te,confirmDeliveryShortageRepayment:re,
+updateDeliveryCashSubmission:z,createExpenseVoucher:ne,updateExpenseVoucher:oe,confirmExpenseVoucher:ie,createFundTransfer:ae,updateFundTransfer:se,confirmFundTransfer:de,
+postFundLedger:H,buildFundLedgerIdempotencyKey:v};

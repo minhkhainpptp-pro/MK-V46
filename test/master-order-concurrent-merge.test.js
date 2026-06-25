@@ -6,8 +6,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
-const sales = fs.readFileSync(path.join(root, 'src/services/master-order/masterOrderLegacy.service.js'), 'utf8');
-const returns = fs.readFileSync(path.join(root, 'src/services/masterReturnOrderService.js'), 'utf8');
+const sales = require('./helpers/sourceBundle.util').readSource(path.join(root, 'src/services/master-order/masterOrderLegacy.service.js'));
+const returns = require('./helpers/sourceBundle.util').readSource(path.join(root, 'src/services/masterReturnOrderService.js'));
 
 test('master sales order atomically claims only unmerged active children', () => {
   assert.match(sales, /function buildUnclaimedChildOrderFilter/);
@@ -18,8 +18,9 @@ test('master sales order atomically claims only unmerged active children', () =>
   assert.match(sales, /CHILD_ORDER_ALREADY_CLAIMED/);
 });
 
-test('master return order deduplicates input and atomically claims unmerged children', () => {
+test('master return order rejects duplicate input and atomically claims unmerged children', () => {
   assert.match(returns, /const returnOrderIds = \[\.\.\.new Set/);
+  assert.match(returns, /Danh sách phiếu trả hàng có ID trùng/);
   assert.match(returns, /MongoStore\.returnOrders\.updateMany/);
   assert.match(returns, /masterReturnOrderId: \{ \$exists: false \}/);
   assert.match(returns, /returnMergeStatus: \{ \$ne: 'merged' \}/);

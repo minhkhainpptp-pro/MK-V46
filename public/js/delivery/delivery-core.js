@@ -10,6 +10,15 @@
     return String(value == null ? '' : value).trim();
   }
 
+  function normalizeDeliveryOrderFilters(filters) {
+    filters = Object.assign({}, filters || {});
+    var rawStatusFilter = String(filters.statusFilter || filters.deliveryStatusFilter || filters.orderStatusFilter || filters.status || filters.deliveryStatus || '').trim().toLowerCase();
+    var includeDelivered = ['all', 'tat ca', 'tất cả', '*', 'delivered', 'da giao', 'đã giao', 'completed', 'done', 'success', 'accounting_confirmed'].indexOf(rawStatusFilter) >= 0;
+    filters.includeCompleted = includeDelivered ? '1' : '0';
+    filters.includeDelivered = includeDelivered ? '1' : '0';
+    return filters;
+  }
+
   function money(value) {
     try { return Math.round(toNumber(value)).toLocaleString('vi-VN'); }
     catch (err) { return String(Math.round(toNumber(value))); }
@@ -261,7 +270,10 @@
       returnsLoaded: false,
       returnsLoadedByOrder: {},
       selectedOrder: null,
-      filters: {}
+      filters: {},
+      requestSeq: { orders: 0, returns: 0 },
+      ordersLoadKey: '',
+      ordersLoadPromise: null
     },
 
     money: money,
@@ -295,26 +307,41 @@
     },
 
     async loadOrders(filters) {
-      filters = Object.assign({}, filters || {});
-      // Web admin cần được lọc theo NVGH/NVBH.
-      // App giao hàng nếu user role=delivery thì backend /api/delivery/* sẽ tự ép NVGH theo token,
-      // nên không cần xóa deliveryStaffCode ở core chung.
+      filters = normalizeDeliveryOrderFilters(filters);
       this.state.filters = Object.assign({}, this.state.filters, filters || {});
       var params = new URLSearchParams();
       Object.keys(this.state.filters).forEach(function (key) {
         var value = DeliveryCore.state.filters[key];
         if (value !== undefined && value !== null && String(value).trim() !== '') params.set(key, value);
       });
-      var json = await this.api('/api/delivery/orders' + (params.toString() ? '?' + params.toString() : ''));
-      var rows = dedupeOrders(json.orders || json.rows || json.items || []);
-      this.state.summary = json.summary || {};
-      this.state.reconciliation = json.reconciliation || {};
-      this.state.orders = dedupeOrders(rows.map(normalizeOrder));
-      if (this.state.selectedOrder) {
-        var key = orderKey(this.state.selectedOrder);
-        this.state.selectedOrder = this.state.orders.find(function (row) { return orderKey(row) === key; }) || null;
+      var requestKey = params.toString();
+      if (this.state.ordersLoadPromise && this.state.ordersLoadKey === requestKey) return this.state.ordersLoadPromise;
+
+      var requestSeq = Number(this.state.requestSeq && this.state.requestSeq.orders || 0) + 1;
+      this.state.requestSeq = Object.assign({}, this.state.requestSeq, { orders: requestSeq });
+      this.state.ordersLoadKey = requestKey;
+      this.state.ordersLoadPromise = (async () => {
+        var json = await this.api('/api/delivery/orders' + (requestKey ? '?' + requestKey : ''));
+        if (!this.state.requestSeq || requestSeq !== this.state.requestSeq.orders) return this.state.orders;
+        var rows = dedupeOrders(json.orders || json.rows || json.items || []);
+        this.state.summary = json.summary || {};
+        this.state.reconciliation = json.reconciliation || {};
+        this.state.orders = dedupeOrders(rows.map(normalizeOrder));
+        if (this.state.selectedOrder) {
+          var key = orderKey(this.state.selectedOrder);
+          this.state.selectedOrder = this.state.orders.find(function (row) { return orderKey(row) === key; }) || null;
+        }
+        return this.state.orders;
+      })();
+
+      try {
+        return await this.state.ordersLoadPromise;
+      } finally {
+        if (this.state.ordersLoadKey === requestKey) {
+          this.state.ordersLoadKey = '';
+          this.state.ordersLoadPromise = null;
+        }
       }
-      return this.state.orders;
     },
 
     buildReturnQueryForOrder(order) {
@@ -347,12 +374,15 @@
 
     async loadReturns(filters) {
       filters = Object.assign({}, this.state.filters, filters || {});
+      var requestSeq = Number(this.state.requestSeq && this.state.requestSeq.returns || 0) + 1;
+      this.state.requestSeq = Object.assign({}, this.state.requestSeq, { returns: requestSeq });
       var params = new URLSearchParams();
       Object.keys(filters).forEach(function (key) {
         var value = filters[key];
         if (value !== undefined && value !== null && String(value).trim() !== '') params.set(key, value);
       });
       var json = await this.api('/api/delivery/returns' + (params.toString() ? '?' + params.toString() : ''));
+      if (!this.state.requestSeq || requestSeq !== this.state.requestSeq.returns) return this.state.returns;
       var rows = json.returns || json.returnOrders || json.rows || [];
       this.state.returns = rows.map(normalizeReturnRow);
       this.state.returnsLoaded = true;
@@ -406,8 +436,9 @@
       return Object.assign({}, amounts, { processed: processed, debt: debt });
     },
 
-    buildReturnPayload(order, items) {
+    buildReturnPayload(order, items, options) {
       order = normalizeOrder(order);
+      options = options || {};
       return {
         orderId: order.orderId,
         orderCode: order.orderCode,
@@ -420,9 +451,10 @@
         deliveryStaffName: order.deliveryStaffName,
         salesStaffCode: order.salesStaffCode,
         salesStaffName: order.salesStaffName,
-        returnType: 'partial',
+        returnType: text(options.returnType || 'partial') || 'partial',
         replaceReturnItems: true,
         allowEmptyReturn: true,
+        note: text(options.note || ''),
         items: (Array.isArray(items) ? items : []).map(normalizeItem)
       };
     },
@@ -442,9 +474,21 @@
       };
     },
 
-    async saveReturn(order, items) {
+    async saveReturn(order, items, options) {
       order = normalizeOrder(order || this.state.selectedOrder);
-      var json = await this.api('/api/delivery/return', { method: 'POST', body: JSON.stringify(this.buildReturnPayload(order, items)) });
+      var payload = this.buildReturnPayload(order, items, options);
+      var json;
+      try {
+        json = await this.api('/api/delivery/return', { method: 'POST', body: JSON.stringify(payload) });
+      } catch (err) {
+        if (window.MobileOfflineSync && window.MobileOfflineSync.isNetworkError(err)) {
+          var offlineError = new Error('Mất kết nối. Vui lòng thử lại khi có mạng. Giao dịch chưa được ghi nhận.');
+          offlineError.code = 'DELIVERY_OFFLINE_TRANSACTION_NOT_RECORDED';
+          offlineError.cause = err;
+          throw offlineError;
+        }
+        throw err;
+      }
       if (json.order) this.patchOrder(json.order);
 
       // After saving Tab 2, Tab 3 must show the official returnOrder immediately.
@@ -467,7 +511,19 @@
     },
 
     async savePayment(order, payment) {
-      var json = await this.api('/api/delivery/payment', { method: 'POST', body: JSON.stringify(this.buildPaymentPayload(order, payment)) });
+      var payload = this.buildPaymentPayload(order, payment);
+      var json;
+      try {
+        json = await this.api('/api/delivery/payment', { method: 'POST', body: JSON.stringify(payload) });
+      } catch (err) {
+        if (window.MobileOfflineSync && window.MobileOfflineSync.isNetworkError(err)) {
+          var offlineError = new Error('Mất kết nối. Vui lòng thử lại khi có mạng. Giao dịch chưa được ghi nhận.');
+          offlineError.code = 'DELIVERY_OFFLINE_TRANSACTION_NOT_RECORDED';
+          offlineError.cause = err;
+          throw offlineError;
+        }
+        throw err;
+      }
       if (json.order) this.patchOrder(json.order);
       return json;
     },
@@ -480,8 +536,10 @@
         if (value !== undefined && value !== null && String(value).trim() !== '') params.set(key, value);
       });
       var json = await this.api('/api/delivery/reconciliation' + (params.toString() ? '?' + params.toString() : ''));
-      this.state.reconciliation = json.reconciliation || json.summary || {};
-      return this.state.reconciliation;
+      var report = json.data && json.data.summary ? json.data : { summary: json.reconciliation || json.summary || {} };
+      this.state.reconciliationReport = report;
+      this.state.reconciliation = report.summary || {};
+      return report;
     },
 
     async confirmAccounting(orderIds, filters) {

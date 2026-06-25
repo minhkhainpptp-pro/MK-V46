@@ -5,8 +5,14 @@ const MongoStore = require('../models');
 const INDEX_DEFINITIONS = {
   products: [
     [{ code: 1 }, { name: 'uniq_products_code', unique: true, partialFilterExpression: { code: { $type: 'string', $gt: '' } } }],
+    [{ productCode: 1 }, { name: 'idx_products_product_code', sparse: true }],
+    [{ sku: 1 }, { name: 'idx_products_sku', sparse: true }],
+    [{ id: 1 }, { name: 'idx_products_id', sparse: true }],
     [{ barcode: 1 }, { name: 'idx_products_barcode', sparse: true }],
-    [{ isActive: 1, code: 1 }, { name: 'idx_products_active_code' }]
+    [{ isActive: 1, code: 1 }, { name: 'idx_products_active_code' }],
+    [{ isActive: 1, productCode: 1 }, { name: 'idx_products_active_product_code', sparse: true }],
+    [{ isActive: 1, sku: 1 }, { name: 'idx_products_active_sku', sparse: true }],
+    [{ isActive: 1, barcode: 1 }, { name: 'idx_products_active_barcode', sparse: true }]
   ],
   customers: [
     [{ code: 1 }, { name: 'uniq_customers_code', unique: true, partialFilterExpression: { code: { $type: 'string', $gt: '' } } }],
@@ -37,8 +43,21 @@ const INDEX_DEFINITIONS = {
     [{ salesStaffCode: 1, orderDate: -1, status: 1 }, { name: 'idx_orders_sales_staff_order_date_status' }],
     [{ orderDate: -1, createdAt: -1 }, { name: 'idx_orders_order_date_created_desc' }],
     [{ deliveryDate: -1, deliveryStaffCode: 1, deliveryStatus: 1 }, { name: 'idx_orders_delivery_date_staff_status_desc' }],
+    [{ deliveryDate: 1, deliveryStaffCode: 1, status: 1, deliveryStatus: 1, masterOrderId: 1 }, { name: 'idx_orders_delivery_staff_master_id_perf', sparse: true }],
+    [{ deliveryDate: 1, deliveryStaffCode: 1, status: 1, deliveryStatus: 1, masterOrderCode: 1 }, { name: 'idx_orders_delivery_staff_master_code_perf', sparse: true }],
+    [{ deliveryDate: -1, deliveryStaffCode: 1, masterOrderId: 1, deliveryStatus: 1 }, { name: 'idx_orders_delivery_staff_master_id_status', sparse: true }],
+    [{ deliveryDate: -1, deliveryStaffCode: 1, masterOrderCode: 1, deliveryStatus: 1 }, { name: 'idx_orders_delivery_staff_master_code_status', sparse: true }],
+    [{ deliveryDate: -1, deliveryStaffCode: 1, deliveryMasterId: 1, deliveryStatus: 1 }, { name: 'idx_orders_delivery_staff_delivery_master_id_status', sparse: true }],
+    [{ deliveryDate: -1, deliveryStaffCode: 1, deliveryMasterCode: 1, deliveryStatus: 1 }, { name: 'idx_orders_delivery_staff_delivery_master_code_status', sparse: true }],
     [{ masterOrderId: 1 }, { name: 'idx_orders_master_order_id', sparse: true }],
     [{ masterOrderCode: 1 }, { name: 'idx_orders_master_order_code', sparse: true }],
+    [{ deliveryMasterId: 1 }, { name: 'idx_orders_delivery_master_id', sparse: true }],
+    [{ deliveryMasterCode: 1 }, { name: 'idx_orders_delivery_master_code', sparse: true }],
+    [{ orderCode: 1 }, { name: 'idx_orders_order_code', sparse: true }],
+    [{ salesOrderCode: 1 }, { name: 'idx_orders_sales_order_code', sparse: true }],
+    [{ status: 1, orderDate: -1 }, { name: 'idx_orders_status_order_date' }],
+    [{ lifecycleStatus: 1, orderDate: -1 }, { name: 'idx_orders_lifecycle_order_date' }],
+    [{ createdAt: -1 }, { name: 'idx_orders_created_at_desc' }],
     [{ source: 1, orderDate: -1, status: 1 }, { name: 'idx_orders_source_order_date_status', sparse: true }],
     [{ vatInvoiceRequired: 1, orderDate: -1, status: 1 }, { name: 'idx_orders_vat_required_order_date_status' }],
     [{ accountingStatus: 1, orderDate: -1, salesStaffCode: 1 }, { name: 'idx_orders_dashboard_accounting_date_staff' }]
@@ -71,9 +90,15 @@ const INDEX_DEFINITIONS = {
     // Compound index thay thế các index đơn cùng prefix.
     [{ salesOrderId: 1, status: 1 }, { name: 'idx_return_orders_sales_order_id_status', sparse: true }],
     [{ salesOrderCode: 1, status: 1 }, { name: 'idx_return_orders_sales_order_code_status', sparse: true }],
+    [{ orderId: 1, status: 1 }, { name: 'idx_return_orders_order_id_status', sparse: true }],
+    [{ orderCode: 1, status: 1 }, { name: 'idx_return_orders_order_code_status', sparse: true }],
     [{ sourceOrderId: 1, status: 1 }, { name: 'idx_return_orders_source_status' }],
+    [{ sourceOrderCode: 1, status: 1 }, { name: 'idx_return_orders_source_code_status', sparse: true }],
+    [{ deliveryOrderId: 1, status: 1 }, { name: 'idx_return_orders_delivery_order_id_status', sparse: true }],
+    [{ deliveryOrderCode: 1, status: 1 }, { name: 'idx_return_orders_delivery_order_code_status', sparse: true }],
     [{ masterReturnOrderId: 1 }, { name: 'idx_return_orders_master_return_id', sparse: true }],
     [{ masterReturnOrderCode: 1 }, { name: 'idx_return_orders_master_return_code', sparse: true }],
+    [{ masterReturnOrderId: 1, masterReturnOrderCode: 1, returnMergeStatus: 1 }, { name: 'idx_return_orders_master_return_merge_guard', sparse: true }],
     [{ masterOrderId: 1 }, { name: 'idx_return_orders_master_order_id', sparse: true }],
     [{ masterOrderCode: 1 }, { name: 'idx_return_orders_master_order_code', sparse: true }],
     [{ returnMergeStatus: 1, date: 1 }, { name: 'idx_return_orders_merge_date' }],
@@ -196,6 +221,10 @@ const INDEX_DEFINITIONS = {
     [{ idempotencyKey: 1 }, { name: 'uniq_fund_ledger_idempotency_key', unique: true, sparse: true }],
     [{ date: 1, fundType: 1, direction: 1 }, { name: 'idx_fund_ledgers_date_fund_direction' }],
     [{ sourceType: 1, sourceCode: 1, fundType: 1, direction: 1 }, { name: 'idx_fund_ledgers_source_unique_guard' }],
+    [{ sourceType: 1, sourceId: 1, fundType: 1, direction: 1 }, { name: 'idx_fund_ledgers_source_id_guard' }],
+    [{ refType: 1, refId: 1 }, { name: 'idx_fund_ledgers_ref_type_id', sparse: true }],
+    [{ referenceType: 1, referenceId: 1 }, { name: 'idx_fund_ledgers_reference_type_id', sparse: true }],
+    [{ date: 1, status: 1, isDeleted: 1, deletedAt: 1 }, { name: 'idx_fund_ledgers_dashboard_cash_today' }],
     [{ deliveryDate: 1, deliveryStaffCode: 1 }, { name: 'idx_fund_ledgers_delivery_staff_date' }],
     [
       { sourceType: 1, fundType: 1, direction: 1, deliveryStaffCode: 1, deliveryDate: -1 },
@@ -242,7 +271,10 @@ const INDEX_DEFINITIONS = {
         unique: true,
         sparse: true
       }
-    ]
+    ],
+    [{ code: 1 }, { name: 'idx_inventories_code', sparse: true }],
+    [{ sku: 1 }, { name: 'idx_inventories_sku', sparse: true }],
+    [{ productId: 1 }, { name: 'idx_inventories_product_id', sparse: true }]
   ],
   journals: [
     // journals chỉ còn là nguồn tương thích/migration; ba compound index này
@@ -274,15 +306,18 @@ const INDEX_DEFINITIONS = {
   promotionProductRules: [
     [{ programCode: 1, productCode: 1 }, { name: 'uniq_promotion_product_rules_program_product', unique: true, sparse: true }],
     [{ productCode: 1, isActive: 1 }, { name: 'idx_promotion_product_rules_product_active' }],
+    [{ programCode: 1, isActive: 1 }, { name: 'idx_promotion_product_rules_program_active' }],
     [{ missingProduct: 1, programCode: 1 }, { name: 'idx_promotion_product_rules_missing_program' }]
   ],
   promotionGroupItems: [
     [{ programCode: 1, productCode: 1 }, { name: 'uniq_promotion_group_items_program_product', unique: true, sparse: true }],
     [{ productCode: 1, isActive: 1 }, { name: 'idx_promotion_group_items_product_active' }],
+    [{ programCode: 1, isActive: 1 }, { name: 'idx_promotion_group_items_program_active' }],
     [{ missingProduct: 1, programCode: 1 }, { name: 'idx_promotion_group_items_missing_program' }]
   ],
   promotionGroupRules: [
     [{ programCode: 1, minAmount: 1 }, { name: 'idx_promotion_group_rules_program_min_amount' }],
+    [{ groupCode: 1, minAmount: 1 }, { name: 'idx_promotion_group_rules_group_min_amount' }],
     [{ programCode: 1, isActive: 1 }, { name: 'idx_promotion_group_rules_program_active' }]
   ],
   importTemplates: [[{ type: 1, name: 1 }, { name: 'idx_import_templates_type_name' }]],
@@ -332,6 +367,7 @@ const INDEX_DEFINITIONS = {
   ],
   dmsInventorySnapshots: [
     [{ importId: 1, productCode: 1 }, { name: 'uniq_dms_snapshot_import_product', unique: true }],
+    [{ importId: 1 }, { name: 'idx_dms_snapshot_import_id' }],
     [{ importId: 1, comparisonType: 1, internalExcessQty: -1 }, { name: 'idx_dms_snapshot_import_type_internal' }],
     [{ productCode: 1, snapshotAt: -1 }, { name: 'idx_dms_snapshot_product_time' }],
     [{ expiresAt: 1 }, { name: 'ttl_dms_inventory_snapshot_preview', expireAfterSeconds: 0 }]
@@ -347,6 +383,106 @@ const INDEX_DEFINITIONS = {
     [{ sourceOrderId: 1, productCode: 1 }, { name: 'idx_internal_sale_allocation_ledger_order_product' }]
   ]
 };
+
+Object.assign(INDEX_DEFINITIONS, {
+  outboxEvents: [
+    [{ id: 1 }, { name: 'uniq_outbox_events_id', unique: true }],
+    [{ status: 1, availableAt: 1, createdAt: 1 }, { name: 'idx_outbox_status_available_created' }],
+    [{ tenantId: 1, aggregateType: 1, aggregateId: 1 }, { name: 'idx_outbox_tenant_aggregate' }]
+  ],
+  purchaseOrders: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_purchase_orders_tenant_id', unique: true }],
+    [{ tenantId: 1, code: 1 }, { name: 'uniq_purchase_orders_tenant_code', unique: true }],
+    [{ tenantId: 1, supplierCode: 1, status: 1, orderDate: -1 }, { name: 'idx_purchase_orders_supplier_status_date' }]
+  ],
+  goodsReceipts: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_goods_receipts_tenant_id', unique: true }],
+    [{ tenantId: 1, code: 1 }, { name: 'uniq_goods_receipts_tenant_code', unique: true }],
+    [{ tenantId: 1, purchaseOrderId: 1, receiptDate: -1 }, { name: 'idx_goods_receipts_po_date' }]
+  ],
+  supplierPayableLedgers: [
+    [{ idempotencyKey: 1 }, { name: 'uniq_supplier_payable_idempotency', unique: true }],
+    [{ tenantId: 1, supplierCode: 1, date: -1 }, { name: 'idx_supplier_payable_supplier_date' }],
+    [{ tenantId: 1, refType: 1, refId: 1 }, { name: 'idx_supplier_payable_ref' }]
+  ],
+  supplierPayableAccounts: [
+    [{ tenantId: 1, supplierCode: 1 }, { name: 'uniq_supplier_payable_account', unique: true }],
+    [{ tenantId: 1, balanceAmount: -1 }, { name: 'idx_supplier_payable_account_balance' }]
+  ],
+  supplierPayments: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_supplier_payments_tenant_id', unique: true }],
+    [{ tenantId: 1, code: 1 }, { name: 'uniq_supplier_payments_tenant_code', unique: true }],
+    [{ tenantId: 1, supplierCode: 1, paymentDate: -1 }, { name: 'idx_supplier_payments_supplier_date' }]
+  ],
+  purchaseReturns: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_purchase_returns_tenant_id', unique: true }],
+    [{ tenantId: 1, code: 1 }, { name: 'uniq_purchase_returns_tenant_code', unique: true }],
+    [{ tenantId: 1, supplierCode: 1, returnDate: -1 }, { name: 'idx_purchase_returns_supplier_date' }],
+    [{ tenantId: 1, goodsReceiptId: 1, status: 1 }, { name: 'idx_purchase_returns_receipt_status' }]
+  ],
+  inventoryReservations: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_inventory_reservations_tenant_id', unique: true }],
+    [{ tenantId: 1, referenceType: 1, referenceId: 1 }, { name: 'uniq_inventory_reservations_reference', unique: true }],
+    [{ status: 1, expiresAt: 1 }, { name: 'idx_inventory_reservations_status_expiry' }]
+  ],
+  stockCounts: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_stock_counts_tenant_id', unique: true }],
+    [{ tenantId: 1, code: 1 }, { name: 'uniq_stock_counts_tenant_code', unique: true }],
+    [{ tenantId: 1, warehouseCode: 1, countDate: -1 }, { name: 'idx_stock_counts_warehouse_date' }]
+  ],
+  dashboardDailyStats: [
+    [{ date: 1 }, { name: 'uniq_dashboard_daily_stats_date', unique: true }],
+    [{ month: 1, date: 1 }, { name: 'idx_dashboard_daily_stats_month_date' }],
+    [{ updatedAt: -1 }, { name: 'idx_dashboard_daily_stats_updated_at' }]
+  ],
+  reportingSnapshots: [
+    [{ tenantId: 1, projectionType: 1, date: 1, dimensionKey: 1 }, { name: 'uniq_reporting_snapshot_dimension', unique: true }],
+    [{ tenantId: 1, projectionType: 1, date: -1 }, { name: 'idx_reporting_snapshot_type_date' }]
+  ],
+  mobileSyncOperations: [
+    [{ tenantId: 1, deviceId: 1, operationId: 1 }, { name: 'uniq_mobile_sync_operation', unique: true }],
+    [{ tenantId: 1, actorCode: 1, createdAt: -1 }, { name: 'idx_mobile_sync_actor_created' }],
+    [{ status: 1, updatedAt: -1 }, { name: 'idx_mobile_sync_status_updated' }]
+  ],
+  visitPlans: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_visit_plans_tenant_id', unique: true }],
+    [{ tenantId: 1, salesStaffCode: 1, planDate: -1 }, { name: 'idx_visit_plans_staff_date' }]
+  ],
+  visitExecutions: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_visit_executions_tenant_id', unique: true }],
+    [{ tenantId: 1, visitPlanId: 1, stopId: 1 }, { name: 'uniq_visit_execution_plan_stop', unique: true }],
+    [{ tenantId: 1, salesStaffCode: 1, checkInAt: -1 }, { name: 'idx_visit_execution_staff_checkin' }]
+  ],
+  deliveryRoutePlans: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_delivery_route_plans_tenant_id', unique: true }],
+    [{ tenantId: 1, deliveryStaffCode: 1, deliveryDate: -1 }, { name: 'idx_delivery_route_staff_date' }]
+  ],
+  integrationJobs: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_integration_jobs_tenant_id', unique: true }],
+    [{ status: 1, nextRetryAt: 1, createdAt: 1 }, { name: 'idx_integration_jobs_status_retry' }],
+    [{ tenantId: 1, provider: 1, createdAt: -1 }, { name: 'idx_integration_jobs_provider_created' }]
+  ],
+  operationalHeartbeats: [
+    [{ instanceId: 1 }, { name: 'uniq_operational_heartbeats_instance', unique: true }],
+    [{ service: 1, role: 1, lastHeartbeatAt: -1 }, { name: 'idx_operational_heartbeats_service_role_time' }],
+    [{ expireAt: 1 }, { name: 'ttl_operational_heartbeats_expireAt', expireAfterSeconds: 0 }]
+  ],
+  backgroundJobs: [
+    [{ tenantId: 1, id: 1 }, { name: 'uniq_background_jobs_tenant_id', unique: true }],
+    [{ tenantId: 1, idempotencyKey: 1 }, { name: 'uniq_background_jobs_idempotency', unique: true, partialFilterExpression: { idempotencyKey: { $gt: '' } } }],
+    [{ status: 1, availableAt: 1, createdAt: 1 }, { name: 'idx_background_jobs_status_available' }],
+    [{ status: 1, leaseExpiresAt: 1 }, { name: 'idx_background_jobs_status_lease' }],
+    [{ expireAt: 1 }, { name: 'ttl_background_jobs_expireAt', expireAfterSeconds: 0 }]
+  ],
+  tenants: [
+    [{ id: 1 }, { name: 'uniq_tenants_id', unique: true }],
+    [{ code: 1 }, { name: 'uniq_tenants_code', unique: true }]
+  ],
+  tenantSubscriptions: [
+    [{ tenantId: 1 }, { name: 'uniq_tenant_subscriptions_tenant', unique: true }],
+    [{ status: 1, expiresAt: 1 }, { name: 'idx_tenant_subscriptions_status_expiry' }]
+  ]
+});
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -416,6 +552,47 @@ function buildManagedIndexPlan() {
   }
 
   return Array.from(byPhysicalCollection.values());
+}
+
+
+function uniqueIndexFieldNames(fields = {}) {
+  return Object.keys(fields || {}).filter(Boolean);
+}
+
+function sparseUniqueMatch(fields = {}) {
+  const names = uniqueIndexFieldNames(fields);
+  if (!names.length) return {};
+  return { $or: names.map((field) => ({ [field]: { $exists: true } })) };
+}
+
+async function findDuplicateUniqueIndexKeys(Model, fields = {}, options = {}) {
+  if (!options || options.unique !== true) return [];
+  const fieldNames = uniqueIndexFieldNames(fields);
+  if (!fieldNames.length) return [];
+
+  const matchClauses = [];
+  if (options.partialFilterExpression) matchClauses.push(options.partialFilterExpression);
+  else if (options.sparse) matchClauses.push(sparseUniqueMatch(fields));
+
+  const groupId = fieldNames.reduce((acc, field) => {
+    acc[field.replace(/\./g, '_')] = `$${field}`;
+    return acc;
+  }, {});
+
+  const pipeline = [
+    ...(matchClauses.length ? [{ $match: matchClauses.length === 1 ? matchClauses[0] : { $and: matchClauses } }] : []),
+    { $group: { _id: groupId, count: { $sum: 1 }, examples: { $push: { _id: '$_id', id: '$id', code: '$code' } } } },
+    { $match: { count: { $gt: 1 } } },
+    { $project: { _id: 1, count: 1, examples: { $slice: ['$examples', 5] } } },
+    { $limit: 5 }
+  ];
+
+  try {
+    return await Model.collection.aggregate(pipeline, { allowDiskUse: true }).toArray();
+  } catch (err) {
+    err.message = `Không audit được duplicate trước khi tạo unique index: ${err.message}`;
+    throw err;
+  }
 }
 
 async function ensureMongoIndexes({ logger = console } = {}) {
@@ -492,6 +669,22 @@ async function ensureMongoIndexes({ logger = console } = {}) {
           continue;
         }
 
+        const duplicateKeys = await findDuplicateUniqueIndexKeys(Model, fields, options || {});
+        if (duplicateKeys.length) {
+          const message = `Bỏ qua unique index ${collectionName}.${options?.name || JSON.stringify(fields)} vì đang có ${duplicateKeys.length} nhóm khóa trùng. Cần chạy audit/repair duplicate business keys trước.`;
+          if (logger?.warn) logger.warn(message);
+          else console.warn(message);
+          results.push({
+            collectionKey,
+            collection: collectionName,
+            indexName: options?.name,
+            skipped: true,
+            duplicateConflict: true,
+            duplicateSamples: duplicateKeys
+          });
+          continue;
+        }
+
         const indexName = await Model.collection.createIndex(fields, { background: true, ...options });
         existingIndexes.push({ key: fields, name: indexName, ...options });
         results.push({ collectionKey, collection: collectionName, indexName });
@@ -511,5 +704,6 @@ module.exports = {
   comparableIndexOptions,
   sameIndexKey,
   sameIndexOptions,
+  findDuplicateUniqueIndexKeys,
   ensureMongoIndexes
 };
